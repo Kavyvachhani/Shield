@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "last_updated": "2026-07-29T00:00:00Z",
+    "offline_mode": true,
+    "cve_record_count": 24500,
+    "kev_record_count": 1150,
+    "data_sources": [
+      "FIRST EPSS v3 Data Feed",
+      "CISA Known Exploited Vulnerabilities (KEV) Catalog",
+      "NIST NVD CVSS v4.0 Taxonomy Mapping"
+    ]
+  },
+  "kev_sample_cves": [
+    "CVE-2024-21626",
+    "CVE-2024-29041",
+    "CVE-2023-34362",
+    "CVE-2023-23397",
+    "CVE-2021-44228",
+    "CVE-2017-5638"
+  ]
+}

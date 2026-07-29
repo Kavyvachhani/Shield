@@ -1,0 +1,14 @@
+# Build outputs
+/target
+/apps/desktop/dist
+/apps/desktop/src-tauri/target
+/node_modules
+
+# Scratch & temporary test files
+/scratch
+*.log
+.DS_Store
+
+# Keyring & local DB
+*.sqlite
+*.db

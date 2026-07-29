@@ -1,0 +1,21 @@
+[package]
+name = "sentinel-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core domain logic, authorization gate, finding schema, scoring, and reporting engine for SentinelVAPT."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+sentinel-db = { path = "../sentinel-db" }
+sentinel-adapters = { path = "../sentinel-adapters" }
+
+
