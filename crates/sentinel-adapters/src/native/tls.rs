@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
-use sentinel_core::models::finding::{Finding, Severity};
+use sentinel_core::models::finding::Finding;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -26,9 +26,7 @@ const OWASP_CRYPTO: &str = "A04:2025-Cryptographic Failures";
 const CERT_INVALID: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-CERT-INVALID",
     title: "TLS Certificate Is Not Trusted by Standard Clients",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-295",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -48,9 +46,7 @@ with automated renewal) and serve the full chain including any intermediate cert
 const CERT_EXPIRED: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-CERT-EXPIRED",
     title: "TLS Certificate Has Expired",
-    severity: Severity::Critical,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
-    cvss_score: 9.2,
     cwe: "CWE-298",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -70,9 +66,7 @@ cannot recur.",
 const CERT_EXPIRING: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-CERT-EXPIRING",
     title: "TLS Certificate Expires Soon",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
-    cvss_score: 5.1,
     cwe: "CWE-298",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -89,9 +83,7 @@ alerts at 30 and 7 days before expiry.",
 const CERT_HOSTNAME: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-HOSTNAME-MISMATCH",
     title: "TLS Certificate Does Not Cover the Requested Hostname",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-297",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -111,9 +103,7 @@ field is ignored by current clients.",
 const CERT_WEAK_SIGNATURE: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-WEAK-SIGNATURE",
     title: "TLS Certificate Uses a Weak Signature Algorithm or Key",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-327",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -132,9 +122,11 @@ usually indicates an old internal CA that also needs updating.",
 const TLS_LEGACY_PROTOCOL: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-LEGACY-PROTOCOL",
     title: "TLS 1.3 Not Supported",
-    severity: Severity::Low,
-    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
+    // No impact metrics: negotiating TLS 1.2 instead of 1.3 discloses nothing and
+    // alters nothing, as the description below says outright. Claiming VC:L here
+    // scored this 6.3 (Medium), which overstated a hardening recommendation as a
+    // vulnerability.
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-326",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -534,6 +526,7 @@ impl ServerCertVerifier for CertCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sentinel_core::models::finding::Severity;
 
     fn observation() -> TlsObservation {
         TlsObservation {
@@ -641,12 +634,14 @@ mod tests {
     }
 
     #[test]
-    fn tls12_only_is_reported_as_low() {
+    fn tls12_only_is_reported_as_informational() {
+        // TLS 1.2 is still acceptable, so this is a hardening recommendation
+        // rather than a weakness, and must not inflate the client's risk counts.
         let mut o = observation();
         o.protocol = "TLS 1.2".into();
         let f = analyze(&o, Uuid::new_v4(), Uuid::new_v4(), Utc::now());
         let legacy = f.iter().find(|x| x.title.contains("TLS 1.3 Not Supported")).unwrap();
-        assert_eq!(legacy.severity, Severity::Low);
+        assert_eq!(legacy.severity, Severity::Info);
     }
 
     #[test]

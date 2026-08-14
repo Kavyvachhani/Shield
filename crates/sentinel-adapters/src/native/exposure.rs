@@ -7,7 +7,7 @@
 
 use super::builder::{CheckSpec, NativeFinding};
 use super::probe::{is_readable, truncate, Probe};
-use sentinel_core::models::finding::{Finding, Severity};
+use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
@@ -26,9 +26,7 @@ struct Candidate {
 const VCS_EXPOSED: CheckSpec = CheckSpec {
     id: "NATIVE-VCS-EXPOSED",
     title: "Version Control Directory Publicly Readable",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.7,
     cwe: "CWE-527",
     wstg: "WSTG-CONF-04",
     owasp_2025: OWASP_MISCONFIG,
@@ -49,9 +47,7 @@ compromised and rotate it.",
 const ENV_EXPOSED: CheckSpec = CheckSpec {
     id: "NATIVE-ENV-EXPOSED",
     title: "Environment or Configuration File Publicly Readable",
-    severity: Severity::Critical,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
-    cvss_score: 9.3,
     cwe: "CWE-538",
     wstg: "WSTG-CONF-03",
     owasp_2025: OWASP_CRYPTO,
@@ -71,9 +67,7 @@ environment variables or a secrets manager rather than files inside the document
 const BACKUP_EXPOSED: CheckSpec = CheckSpec {
     id: "NATIVE-BACKUP-EXPOSED",
     title: "Backup or Archive File Publicly Readable",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.7,
     cwe: "CWE-530",
     wstg: "WSTG-CONF-04",
     owasp_2025: OWASP_MISCONFIG,
@@ -92,9 +86,7 @@ served directories with restricted permissions. Add a deny rule for archive and 
 const DEBUG_ENDPOINT: CheckSpec = CheckSpec {
     id: "NATIVE-DEBUG-ENDPOINT",
     title: "Diagnostic or Management Endpoint Exposed",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:L/VA:L/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-489",
     wstg: "WSTG-CONF-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -112,9 +104,7 @@ and expose only the specific endpoints monitoring needs (for example health, not
 const ADMIN_INTERFACE: CheckSpec = CheckSpec {
     id: "NATIVE-ADMIN-INTERFACE",
     title: "Administrative Interface Reachable from the Internet",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.9,
     cwe: "CWE-284",
     wstg: "WSTG-CONF-05",
     owasp_2025: OWASP_ACCESS,
@@ -133,9 +123,7 @@ rate limiting and lockout, and move the console off its default path.",
 const CROSSDOMAIN_POLICY: CheckSpec = CheckSpec {
     id: "NATIVE-CROSSDOMAIN-POLICY",
     title: "Permissive Cross-Domain Policy File",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-942",
     wstg: "WSTG-CONF-08",
     owasp_2025: OWASP_MISCONFIG,
@@ -153,9 +141,7 @@ requires them. If one is required, replace the wildcard with the specific origin
 const METAFILE_DISCLOSURE: CheckSpec = CheckSpec {
     id: "NATIVE-METAFILE-DISCLOSURE",
     title: "Web Server Metafile Discloses Sensitive Paths",
-    severity: Severity::Info,
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 0.0,
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-200",
     wstg: "WSTG-INFO-03",
     owasp_2025: OWASP_MISCONFIG,
@@ -174,9 +160,7 @@ areas with authentication and authorization checks. If a path must stay unindexe
 const DIRECTORY_LISTING: CheckSpec = CheckSpec {
     id: "NATIVE-DIRECTORY-LISTING",
     title: "Directory Listing Enabled",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-548",
     wstg: "WSTG-CONF-04",
     owasp_2025: OWASP_MISCONFIG,
@@ -194,11 +178,7 @@ and place an index file in every served directory.",
 const API_DOCS_EXPOSED: CheckSpec = CheckSpec {
     id: "NATIVE-API-DOCS-EXPOSED",
     title: "API Schema or Documentation Publicly Exposed",
-    // Matches the 5.3 vector below, which sits in the Medium band. Publishing a
-    // schema is sometimes deliberate; triage it to Accepted Risk when it is.
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-1059",
     wstg: "WSTG-APIT-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -215,9 +195,7 @@ actually decommissioned rather than merely undocumented.",
 const GRAPHQL_INTROSPECTION: CheckSpec = CheckSpec {
     id: "NATIVE-GRAPHQL-INTROSPECTION",
     title: "GraphQL Endpoint Detected",
-    severity: Severity::Info,
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 0.0,
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-284",
     wstg: "WSTG-APIT-01",
     owasp_2025: OWASP_ACCESS,

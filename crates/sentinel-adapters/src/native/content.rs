@@ -5,7 +5,7 @@
 
 use super::builder::{CheckSpec, NativeFinding};
 use super::probe::{truncate, ProbeResponse};
-use sentinel_core::models::finding::{Finding, Severity};
+use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
@@ -16,9 +16,7 @@ const OWASP_EXCEPTIONS: &str = "A10:2025-Mishandling of Exceptional Conditions";
 const MIXED_CONTENT: CheckSpec = CheckSpec {
     id: "NATIVE-MIXED-CONTENT",
     title: "Mixed Content: Active Resources Loaded over HTTP on an HTTPS Page",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-319",
     wstg: "WSTG-CRYP-03",
     owasp_2025: OWASP_CRYPTO,
@@ -38,9 +36,7 @@ being fixed, and `block-all-mixed-content` once they are.",
 const FORM_OVER_HTTP: CheckSpec = CheckSpec {
     id: "NATIVE-FORM-INSECURE",
     title: "Credentials Submitted over an Unencrypted Channel",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-319",
     wstg: "WSTG-ATHN-01",
     owasp_2025: OWASP_CRYPTO,
@@ -58,11 +54,7 @@ URL. Redirect the HTTP version of the page to HTTPS rather than serving the form
 const SRI_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-SRI-MISSING",
     title: "Third-Party Script Loaded without Subresource Integrity",
-    // Medium, not Low: the 4.8 vector below already places this in the Medium
-    // band, and the label must not contradict the score printed beside it.
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 4.8,
     cwe: "CWE-353",
     wstg: "WSTG-CLNT-06",
     owasp_2025: OWASP_INTEGRITY,
@@ -83,9 +75,7 @@ change frequently, self-host a pinned copy instead.",
 const TABNABBING: CheckSpec = CheckSpec {
     id: "NATIVE-TABNABBING",
     title: "External Link Opens a New Tab without noopener",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
     cwe: "CWE-1022",
     wstg: "WSTG-CLNT-14",
     owasp_2025: OWASP_MISCONFIG,
@@ -104,9 +94,7 @@ imply noopener for target=\"_blank\", but the attribute is still required for ol
 const STACK_TRACE: CheckSpec = CheckSpec {
     id: "NATIVE-STACK-TRACE",
     title: "Stack Trace or Debug Output Returned to the Client",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.9,
     cwe: "CWE-209",
     wstg: "WSTG-ERRH-02",
     owasp_2025: OWASP_EXCEPTIONS,
@@ -127,9 +115,7 @@ correlation identifier — not the exception text — is what reaches the user."
 const COMMENT_LEAK: CheckSpec = CheckSpec {
     id: "NATIVE-COMMENT-LEAK",
     title: "Sensitive Information Disclosed in HTML Comments",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
     cwe: "CWE-615",
     wstg: "WSTG-INFO-05",
     owasp_2025: OWASP_MISCONFIG,
@@ -147,9 +133,7 @@ rotate anything credential-like they mention.",
 const SESSION_IN_URL: CheckSpec = CheckSpec {
     id: "NATIVE-SESSION-IN-URL",
     title: "Session Token Exposed in URL",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 7.1,
     cwe: "CWE-598",
     wstg: "WSTG-SESS-04",
     owasp_2025: OWASP_CRYPTO,
@@ -168,9 +152,7 @@ short-lived, and exchange it for a cookie-based session immediately on use.",
 const AUTOCOMPLETE_ON: CheckSpec = CheckSpec {
     id: "NATIVE-PASSWORD-AUTOCOMPLETE",
     title: "Password Field Permits Autocomplete on a Shared-Use Form",
-    severity: Severity::Info,
-    cvss_vector: "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 0.0,
+    cvss_vector: "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-522",
     wstg: "WSTG-ATHN-05",
     owasp_2025: OWASP_CRYPTO,

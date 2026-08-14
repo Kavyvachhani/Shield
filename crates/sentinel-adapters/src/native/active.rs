@@ -8,7 +8,7 @@
 
 use super::builder::{CheckSpec, NativeFinding};
 use super::probe::{truncate, Probe, ProbeResponse};
-use sentinel_core::models::finding::{Finding, Severity};
+use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
@@ -26,9 +26,7 @@ const PROBE_HOST: &str = "sentinel-probe.example";
 const NO_HTTPS: CheckSpec = CheckSpec {
     id: "NATIVE-NO-HTTPS",
     title: "Application Served over Unencrypted HTTP",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-319",
     wstg: "WSTG-CRYP-03",
     owasp_2025: OWASP_CRYPTO,
@@ -48,9 +46,7 @@ attempting plaintext connections altogether.",
 const NO_HTTPS_REDIRECT: CheckSpec = CheckSpec {
     id: "NATIVE-NO-HTTPS-REDIRECT",
     title: "HTTP Traffic Not Redirected to HTTPS",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-319",
     wstg: "WSTG-CRYP-03",
     owasp_2025: OWASP_CRYPTO,
@@ -68,9 +64,7 @@ content over HTTP. Enable HSTS on the HTTPS endpoint so subsequent visits skip t
 const CORS_WILDCARD_CREDS: CheckSpec = CheckSpec {
     id: "NATIVE-CORS-CREDENTIALED-REFLECTION",
     title: "CORS Policy Reflects Arbitrary Origin with Credentials Allowed",
-    severity: Severity::High,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 8.2,
     cwe: "CWE-942",
     wstg: "WSTG-CLNT-07",
     owasp_2025: OWASP_ACCESS,
@@ -92,9 +86,7 @@ makes this exploitable, so removing the reflection is the fix.",
 const CORS_NULL_ORIGIN: CheckSpec = CheckSpec {
     id: "NATIVE-CORS-NULL-ORIGIN",
     title: "CORS Policy Trusts the null Origin",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.9,
     cwe: "CWE-942",
     wstg: "WSTG-CLNT-07",
     owasp_2025: OWASP_ACCESS,
@@ -110,11 +102,7 @@ allow-list of real origins and reject anything else, including null.",
 const CORS_WILDCARD: CheckSpec = CheckSpec {
     id: "NATIVE-CORS-WILDCARD",
     title: "CORS Policy Allows All Origins",
-    // Matches the 5.3 vector below. Distinct from the credentialed reflection
-    // case above, which is High because it exposes authenticated responses.
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-942",
     wstg: "WSTG-CLNT-07",
     owasp_2025: OWASP_MISCONFIG,
@@ -131,9 +119,7 @@ accepted as a risk. Otherwise restrict Access-Control-Allow-Origin to the specif
 const DANGEROUS_METHODS: CheckSpec = CheckSpec {
     id: "NATIVE-DANGEROUS-METHODS",
     title: "Unsafe HTTP Methods Advertised",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:H/VA:L/SC:N/SI:N/SA:N",
-    cvss_score: 6.9,
     cwe: "CWE-650",
     wstg: "WSTG-CONF-06",
     owasp_2025: OWASP_MISCONFIG,
@@ -153,9 +139,7 @@ enforce the method allow-list at the reverse proxy so it applies regardless of a
 const HOST_HEADER_REFLECTED: CheckSpec = CheckSpec {
     id: "NATIVE-HOST-HEADER-INJECTION",
     title: "Unvalidated Host Header Reflected in Response",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-644",
     wstg: "WSTG-INPV-17",
     owasp_2025: OWASP_INJECTION,
@@ -177,9 +161,7 @@ explicit default virtual host that rejects requests carrying an unrecognised Hos
 const OPEN_REDIRECT: CheckSpec = CheckSpec {
     id: "NATIVE-OPEN-REDIRECT",
     title: "Open Redirect via Unvalidated Redirect Parameter",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.1,
     cwe: "CWE-601",
     wstg: "WSTG-CLNT-04",
     owasp_2025: OWASP_ACCESS,

@@ -5,7 +5,7 @@
 
 use super::builder::{CheckSpec, NativeFinding};
 use super::probe::{truncate, ProbeResponse};
-use sentinel_core::models::finding::{Finding, Severity};
+use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
@@ -16,9 +16,7 @@ const OWASP_CRYPTO: &str = "A04:2025-Cryptographic Failures";
 const HSTS_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-HSTS-MISSING",
     title: "HTTP Strict Transport Security (HSTS) Not Enforced",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.1,
     cwe: "CWE-319",
     wstg: "WSTG-CONF-07",
     owasp_2025: OWASP_CRYPTO,
@@ -39,9 +37,7 @@ domain to hstspreload.org so the protection applies even on a user's first visit
 const HSTS_WEAK: CheckSpec = CheckSpec {
     id: "NATIVE-HSTS-WEAK",
     title: "HSTS Policy Too Short or Incomplete",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
     cwe: "CWE-319",
     wstg: "WSTG-CONF-07",
     owasp_2025: OWASP_CRYPTO,
@@ -59,9 +55,7 @@ subdomains reachable over plaintext HTTP.",
 const CSP_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-CSP-MISSING",
     title: "Content-Security-Policy Header Absent",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-1021",
     wstg: "WSTG-CONF-12",
     owasp_2025: OWASP_MISCONFIG,
@@ -83,9 +77,7 @@ to the enforcing header once the report endpoint is quiet.",
 const CSP_WEAK: CheckSpec = CheckSpec {
     id: "NATIVE-CSP-WEAK",
     title: "Content-Security-Policy Contains Unsafe Directives",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 5.3,
     cwe: "CWE-1021",
     wstg: "WSTG-CONF-12",
     owasp_2025: OWASP_MISCONFIG,
@@ -105,9 +97,7 @@ Always set `object-src 'none'` and `base-uri 'self'`, which cannot be inherited 
 const XFO_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-CLICKJACKING",
     title: "Clickjacking Protection Missing (No frame-ancestors or X-Frame-Options)",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 4.3,
     cwe: "CWE-1021",
     wstg: "WSTG-CLNT-09",
     owasp_2025: OWASP_MISCONFIG,
@@ -127,9 +117,7 @@ do not honour frame-ancestors.",
 const XCTO_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-XCTO-MISSING",
     title: "X-Content-Type-Options Header Missing (MIME Sniffing Permitted)",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
     cwe: "CWE-430",
     wstg: "WSTG-CONF-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -145,9 +133,7 @@ content is served with an accurate Content-Type from a separate origin or with C
 const REFERRER_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-REFERRER-POLICY",
     title: "Referrer-Policy Not Set or Overly Permissive",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 2.3,
     cwe: "CWE-200",
     wstg: "WSTG-CONF-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -163,9 +149,7 @@ referrer is needed). Independently, stop placing session tokens or record identi
 const PERMISSIONS_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-PERMISSIONS-POLICY",
     title: "Permissions-Policy Header Not Set",
-    severity: Severity::Info,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 0.0,
     cwe: "CWE-16",
     wstg: "WSTG-CONF-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -182,9 +166,10 @@ features the application genuinely uses.",
 const SERVER_BANNER: CheckSpec = CheckSpec {
     id: "NATIVE-BANNER-DISCLOSURE",
     title: "Server Software Version Disclosed in Response Headers",
-    severity: Severity::Low,
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
+    // A version string is not protected data, so there is no confidentiality
+    // impact to the vulnerable system. VC:L scored this 6.9 (Medium), which
+    // put a banner on the same footing as a real data exposure.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-200",
     wstg: "WSTG-INFO-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -203,9 +188,7 @@ matching the disclosed version, and it makes the host easy to find in mass-scann
 const COOKIE_INSECURE: CheckSpec = CheckSpec {
     id: "NATIVE-COOKIE-INSECURE",
     title: "Session Cookie Missing Secure Attribute",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-614",
     wstg: "WSTG-SESS-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -223,9 +206,7 @@ and serve the application exclusively over HTTPS with HSTS enabled.",
 const COOKIE_NO_HTTPONLY: CheckSpec = CheckSpec {
     id: "NATIVE-COOKIE-HTTPONLY",
     title: "Session Cookie Missing HttpOnly Attribute",
-    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 6.3,
     cwe: "CWE-1004",
     wstg: "WSTG-SESS-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -243,9 +224,7 @@ JavaScript should never need to read them; if it does, move that state to a sepa
 const COOKIE_NO_SAMESITE: CheckSpec = CheckSpec {
     id: "NATIVE-COOKIE-SAMESITE",
     title: "Session Cookie Missing or Weak SameSite Attribute",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 3.1,
     cwe: "CWE-1275",
     wstg: "WSTG-SESS-02",
     owasp_2025: OWASP_MISCONFIG,
@@ -264,9 +243,7 @@ it with anti-CSRF tokens.",
 const CACHE_SENSITIVE: CheckSpec = CheckSpec {
     id: "NATIVE-CACHE-CONTROL",
     title: "Authenticated Response Cacheable by Browsers and Proxies",
-    severity: Severity::Low,
     cvss_vector: "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
-    cvss_score: 2.3,
     cwe: "CWE-525",
     wstg: "WSTG-ATHN-06",
     owasp_2025: OWASP_MISCONFIG,

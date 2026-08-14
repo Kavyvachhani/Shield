@@ -10,28 +10,7 @@
 //! They cannot establish that a given severity is the *right* judgement call.
 
 use sentinel_adapters::native::all_specs;
-use sentinel_core::models::finding::Severity;
-
-/// The CVSS 4.0 severity bands, per the FIRST specification.
-fn band_for(score: f64) -> &'static str {
-    match score {
-        s if s == 0.0 => "None",
-        s if s < 4.0 => "Low",
-        s if s < 7.0 => "Medium",
-        s if s < 9.0 => "High",
-        _ => "Critical",
-    }
-}
-
-fn severity_name(s: &Severity) -> &'static str {
-    match s {
-        Severity::Critical => "Critical",
-        Severity::High => "High",
-        Severity::Medium => "Medium",
-        Severity::Low => "Low",
-        Severity::Info => "None",
-    }
-}
+use sentinel_core::scoring::{Cvss4Severity, Cvss4Vector};
 
 #[test]
 fn every_check_ships_with_a_complete_taxonomy() {
@@ -75,33 +54,6 @@ fn every_check_ships_with_a_complete_taxonomy() {
 }
 
 #[test]
-fn stated_severity_agrees_with_the_cvss_score() {
-    // Collected rather than asserted one at a time: fixing these is a single
-    // editorial pass over the catalogue, so the whole list is more useful than
-    // the first offender.
-    let mismatches: Vec<String> = all_specs()
-        .iter()
-        .filter_map(|spec| {
-            let expected = band_for(spec.cvss_score);
-            let stated = severity_name(&spec.severity);
-            (stated != expected).then(|| {
-                format!(
-                    "  {:<34} labelled {:<8} but scores {:.1} ({})",
-                    spec.id, stated, spec.cvss_score, expected
-                )
-            })
-        })
-        .collect();
-
-    assert!(
-        mismatches.is_empty(),
-        "{} check(s) state a severity their own CVSS score contradicts:\n{}",
-        mismatches.len(),
-        mismatches.join("\n")
-    );
-}
-
-#[test]
 fn every_cvss_vector_is_well_formed_v4() {
     // The four base metrics that CVSS 4.0 requires on every vector.
     const REQUIRED: &[&str] = &["AV:", "AC:", "PR:", "UI:", "VC:", "VI:", "VA:"];
@@ -122,11 +74,42 @@ fn every_cvss_vector_is_well_formed_v4() {
                 spec.cvss_vector
             );
         }
+        // The vector must actually parse, since the score and the severity the
+        // report prints are both derived from it.
+        let parsed = Cvss4Vector::parse(spec.cvss_vector)
+            .unwrap_or_else(|e| panic!("{} has an unparseable vector: {e}", spec.id));
+        let score = parsed.score();
         assert!(
-            (0.0..=10.0).contains(&spec.cvss_score),
-            "{} scores {:.1}, outside the 0.0-10.0 range",
+            (0.0..=10.0).contains(&score),
+            "{} scores {score:.1}, outside the 0.0-10.0 range",
+            spec.id
+        );
+        assert!(
+            (score - spec.score()).abs() < f64::EPSILON,
+            "{} disagrees with its own vector",
+            spec.id
+        );
+    }
+}
+
+#[test]
+fn severity_is_the_band_of_the_computed_score() {
+    // Severity is derived, so this can no longer drift — the test documents the
+    // guarantee and would catch a regression in the mapping.
+    for spec in all_specs() {
+        let expected = match Cvss4Severity::of(spec.score()) {
+            Cvss4Severity::Critical => "Critical",
+            Cvss4Severity::High => "High",
+            Cvss4Severity::Medium => "Medium",
+            Cvss4Severity::Low => "Low",
+            Cvss4Severity::None => "Info",
+        };
+        let actual = format!("{:?}", spec.severity());
+        assert_eq!(
+            actual, expected,
+            "{} scores {:.1} but reports severity {actual}",
             spec.id,
-            spec.cvss_score
+            spec.score()
         );
     }
 }

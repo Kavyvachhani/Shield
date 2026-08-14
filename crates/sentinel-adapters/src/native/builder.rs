@@ -9,6 +9,7 @@
 use sentinel_core::models::finding::{
     AITriage, CVSS4Data, Evidence, Finding, FindingStatus, Severity,
 };
+use sentinel_core::scoring::{Cvss4Severity, Cvss4Vector};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -18,9 +19,15 @@ pub struct CheckSpec {
     /// Stable internal identifier, e.g. "NATIVE-HSTS-MISSING".
     pub id: &'static str,
     pub title: &'static str,
-    pub severity: Severity,
+    /// The CVSS 4.0 vector, and the single source of truth for how serious this
+    /// check is.
+    ///
+    /// Neither a numeric score nor a severity label is stored alongside it.
+    /// Both are computed from this string by [`CheckSpec::score`] and
+    /// [`CheckSpec::severity`]. When they were declared by hand, 37 of the 45
+    /// checks drifted away from the vector printed next to them in the report —
+    /// deriving them makes that class of error unrepresentable.
     pub cvss_vector: &'static str,
-    pub cvss_score: f64,
     pub cwe: &'static str,
     pub wstg: &'static str,
     pub owasp_2025: &'static str,
@@ -31,6 +38,29 @@ pub struct CheckSpec {
     pub remediation: &'static str,
     /// Reference URLs.
     pub references: &'static [&'static str],
+}
+
+impl CheckSpec {
+    /// The CVSS 4.0 base score, computed from [`Self::cvss_vector`].
+    ///
+    /// A malformed vector scores 0.0 rather than panicking; the spec audit
+    /// fails the build long before a scan could reach that state.
+    pub fn score(&self) -> f64 {
+        Cvss4Vector::parse(self.cvss_vector)
+            .map(|v| v.score())
+            .unwrap_or(0.0)
+    }
+
+    /// The severity band this check's score falls into.
+    pub fn severity(&self) -> Severity {
+        match Cvss4Severity::of(self.score()) {
+            Cvss4Severity::Critical => Severity::Critical,
+            Cvss4Severity::High => Severity::High,
+            Cvss4Severity::Medium => Severity::Medium,
+            Cvss4Severity::Low => Severity::Low,
+            Cvss4Severity::None => Severity::Info,
+        }
+    }
 }
 
 /// Builder that attaches per-instance detail to a `CheckSpec`.
@@ -64,11 +94,11 @@ impl NativeFinding {
             target_id,
             title: spec.title.to_string(),
             description,
-            severity: spec.severity.clone(),
+            severity: spec.severity(),
             cvss4: Some(CVSS4Data {
                 vector_string: spec.cvss_vector.to_string(),
-                base_score: spec.cvss_score,
-                severity_label: severity_label(&spec.severity).to_string(),
+                base_score: spec.score(),
+                severity_label: severity_label(&spec.severity()).to_string(),
             }),
             // Native checks observe live configuration; they are not CVE-backed,
             // so EPSS/KEV do not apply and must stay absent rather than be faked.
@@ -132,9 +162,7 @@ mod tests {
     const SPEC: CheckSpec = CheckSpec {
         id: "NATIVE-TEST",
         title: "Test Check",
-        severity: Severity::Medium,
         cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
-        cvss_score: 5.3,
         cwe: "CWE-16",
         wstg: "WSTG-CONF-02",
         owasp_2025: "A02:2025-Security Misconfiguration",
@@ -161,7 +189,8 @@ mod tests {
         assert_eq!(f.owasp_2025.as_deref(), Some("A02:2025-Security Misconfiguration"));
         assert_eq!(f.source_tools, vec!["Sentinel Native".to_string()]);
         assert!(f.description.contains("Observed: header was absent"));
-        assert_eq!(f.cvss4.unwrap().base_score, 5.3);
+        // Computed from the vector above, not declared beside it.
+        assert_eq!(f.cvss4.unwrap().base_score, 6.9);
         assert_eq!(f.references.len(), 1);
     }
 
