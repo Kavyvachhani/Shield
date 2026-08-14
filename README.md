@@ -69,8 +69,9 @@ Builds are not code-signed, so both macOS and Windows show a first-run warning:
 
 - **macOS** — open the `.dmg`, drag to Applications, then right-click the app →
   **Open** → **Open**.
-- **Windows** — run the `.exe`; at the SmartScreen prompt choose
-  **More info** → **Run anyway**. Installs per-user, no admin rights needed.
+- **Windows** — run the `.exe` and follow the setup wizard; at the SmartScreen
+  prompt choose **More info** → **Run anyway**. Installs per-user, no admin rights
+  needed. An `.msi` is also published for per-machine Intune / Group Policy rollout.
 - **Linux** — install the `.deb`, or `chmod +x` the `.AppImage` and run it.
 
 ## Build from source
@@ -86,8 +87,12 @@ npm run tauri build
 
 Tauri links against each platform's native webview, so installers must be built on the
 platform they target — a Windows `.exe` cannot be cross-compiled from macOS or Linux.
-The `.github/workflows/release.yml` workflow builds all three platforms; push a `v*` tag
-or trigger it manually from the Actions tab.
+
+- **On Windows**, run `scripts\build-windows.ps1`. It checks the toolchain, runs the
+  tests, and builds both the `.exe` wizard and the `.msi`.
+- **In CI**, the `.github/workflows/release.yml` workflow builds all three platforms.
+  Push a `v*` tag to cut a release, or run it manually from the Actions tab and leave
+  the platform choice on `windows` for a Windows-only build.
 
 ## Development
 

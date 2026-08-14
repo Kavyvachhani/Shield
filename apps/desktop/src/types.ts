@@ -39,6 +39,8 @@ export interface Project {
   id: string;
   companyName: string;
   logoPath?: string;
+  /** The client's logo as a base64 `data:image/...` URI, stamped on every report. */
+  logoDataUri?: string;
   primaryColor?: string;
   name: string;
   createdAt: string;
@@ -166,7 +168,14 @@ export interface CreateProjectInput {
   companyName: string;
   name: string;
   logoPath?: string;
+  logoDataUri?: string;
   primaryColor?: string;
+}
+
+export interface SetProjectLogoInput {
+  projectId: string;
+  /** Omit or pass an empty string to clear the logo. */
+  logoDataUri?: string;
 }
 
 export interface CreateTargetInput {

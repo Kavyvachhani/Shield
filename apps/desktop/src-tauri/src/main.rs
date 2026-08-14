@@ -30,6 +30,7 @@ fn main() {
             commands::projects::create_project,
             commands::projects::list_projects,
             commands::projects::get_project,
+            commands::projects::set_project_logo,
             // Target commands
             commands::targets::create_target,
             commands::targets::list_targets,

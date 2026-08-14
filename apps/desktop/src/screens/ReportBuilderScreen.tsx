@@ -1,7 +1,24 @@
-import { useEffect, useState } from 'react';
-import { Download, Eye, Loader2, FileText } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Download, Eye, Loader2, FileText, ImagePlus, X } from 'lucide-react';
 import type { GenerateReportInput, GenerateReportOutput, Project, ReportType } from '../types';
 import { api } from '../lib/tauri';
+
+/**
+ * Logo formats the report engine will actually embed. SVG is deliberately
+ * absent — it can carry script, so the engine rejects it.
+ */
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+/** Read a picked file as a `data:image/...;base64,` URI. */
+function readAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 interface Props {
   project: Project;
@@ -67,10 +84,18 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
   const [error, setError] = useState('');
+  const [logo, setLogo] = useState<string | undefined>(project.logoDataUri);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const logoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.defaultExportDir().then(setExportDir).catch(() => setExportDir(''));
   }, []);
+
+  // A different engagement brings its own branding.
+  useEffect(() => {
+    setLogo(project.logoDataUri);
+  }, [project.id, project.logoDataUri]);
 
   // A newly chosen report type invalidates whatever was generated before.
   useEffect(() => {
@@ -80,6 +105,53 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
   }, [reportType]);
 
   const isHtml = report?.contentType === 'text/html';
+
+  /**
+   * Validate a picked image, then save it against the project so every report
+   * for this engagement is branded — not just the one generated right now.
+   */
+  async function pickLogo(file: File) {
+    setError('');
+    setExportMsg('');
+
+    if (!LOGO_TYPES.includes(file.type)) {
+      setError('Use a PNG, JPEG, GIF or WebP image. SVG is not accepted, because it can carry script.');
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setError(`That image is ${Math.round(file.size / 1024)} KB. Please use one under ${MAX_LOGO_BYTES / 1024} KB.`);
+      return;
+    }
+
+    setLogoBusy(true);
+    try {
+      const dataUri = await readAsDataUri(file);
+      await api.setProjectLogo({ projectId: project.id, logoDataUri: dataUri });
+      setLogo(dataUri);
+      // The generated report predates this logo, so it no longer reflects settings.
+      setReport(null);
+      setPreview(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLogoBusy(false);
+    }
+  }
+
+  async function clearLogo() {
+    setError('');
+    setLogoBusy(true);
+    try {
+      await api.setProjectLogo({ projectId: project.id, logoDataUri: undefined });
+      setLogo(undefined);
+      setReport(null);
+      setPreview(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLogoBusy(false);
+    }
+  }
 
   async function generate() {
     setError('');
@@ -95,6 +167,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
         targetName,
         targetUrl,
         analyst: analyst.trim() || undefined,
+        logoDataUri: logo,
       };
       setReport(await api.generateReport(input));
     } catch (err) {
@@ -184,6 +257,83 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               placeholder="Your name or team"
               style={inputStyle}
             />
+          </Field>
+
+          <Field label="Company logo (optional)">
+            <input
+              ref={logoInput}
+              type="file"
+              accept={LOGO_TYPES.join(',')}
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Reset first, so re-picking the same file fires onChange again.
+                e.target.value = '';
+                if (file) void pickLogo(file);
+              }}
+            />
+
+            {logo ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: 10,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-strong)',
+                  background: 'var(--bg-base)',
+                }}
+              >
+                <img
+                  src={logo}
+                  alt="Company logo preview"
+                  style={{
+                    maxHeight: 40,
+                    maxWidth: 130,
+                    objectFit: 'contain',
+                    // Most client logos are dark artwork on transparency, which
+                    // would vanish against the dark UI.
+                    background: '#fff',
+                    borderRadius: 4,
+                    padding: 4,
+                  }}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 'auto' }}>
+                  <button
+                    type="button"
+                    onClick={() => logoInput.current?.click()}
+                    disabled={logoBusy}
+                    style={{ ...miniButton, opacity: logoBusy ? 0.6 : 1 }}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearLogo}
+                    disabled={logoBusy}
+                    style={{ ...miniButton, opacity: logoBusy ? 0.6 : 1 }}
+                  >
+                    <X size={11} /> Remove
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => logoInput.current?.click()}
+                disabled={logoBusy}
+                style={{ ...secondaryButton, width: '100%', opacity: logoBusy ? 0.6 : 1 }}
+              >
+                {logoBusy ? <Loader2 size={14} className="spin" /> : <ImagePlus size={14} />}
+                {logoBusy ? 'Saving…' : 'Upload logo'}
+              </button>
+            )}
+
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>
+              PNG, JPEG, GIF or WebP, up to 2 MB. Embedded in the report itself, so it
+              still displays offline. Saved with the engagement — upload it once.
+            </div>
           </Field>
         </Section>
 
@@ -336,6 +486,21 @@ const secondaryButton: React.CSSProperties = {
   ...primaryButton,
   border: '1px solid var(--border-strong)',
   background: 'var(--bg-elevated)',
+};
+
+const miniButton: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  padding: '4px 8px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--border-strong)',
+  background: 'var(--bg-elevated)',
+  color: 'inherit',
+  fontSize: 10,
+  fontWeight: 600,
+  cursor: 'pointer',
 };
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

@@ -19,17 +19,22 @@ all three platforms.
 
 ```bash
 git push origin main          # then, to cut a release:
-git tag v0.2.1 && git push origin v0.2.1
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
-Or trigger it manually: **Actions → Build Installers → Run workflow**.
+A tag build attaches the installers to a GitHub Release, so they get a permanent
+download link instead of expiring with the run's artifacts.
+
+To get just a Windows build without waiting on macOS and Linux, trigger it
+manually: **Actions → Build Installers → Run workflow**, leaving the platform
+choice on `windows`.
 
 Download from the run's artifacts:
 
 | Artifact | Contents |
 |---|---|
-| `sentinelvapt-windows` | `SentinelVAPT_0.2.1_x64-setup.exe` (NSIS) and `SentinelVAPT_0.2.1_x64_en-US.msi` (for Intune / Group Policy) |
-| `sentinelvapt-macos` | `SentinelVAPT_0.2.1_universal.dmg` |
+| `sentinelvapt-windows` | `SentinelVAPT_0.3.0_x64-setup.exe` (NSIS wizard) and `SentinelVAPT_0.3.0_x64_en-US.msi` (for Intune / Group Policy) |
+| `sentinelvapt-macos` | `SentinelVAPT_0.3.0_universal.dmg` |
 | `sentinelvapt-linux` | `.deb` and `.AppImage` |
 
 ### Option B — build on a Windows machine
@@ -44,6 +49,18 @@ Prerequisites:
 
 ```powershell
 git clone <your-repo-url> SentinelVAPT
+cd SentinelVAPT
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+```
+
+The script verifies the toolchain first and tells you exactly what is missing
+rather than failing part-way through a long build. It then installs the frontend
+dependencies, runs the test suite, builds both installers, and prints where they
+landed. Pass `-SkipTests` to skip the Rust suite.
+
+To drive the build by hand instead:
+
+```powershell
 cd SentinelVAPT\apps\desktop
 npm ci
 npm run tauri build -- --bundles nsis,msi
@@ -53,7 +70,11 @@ The installer lands in `target\release\bundle\nsis\`.
 
 ### Installing on Windows
 
-Run the `.exe`. It installs per-user by default, so no administrator rights are needed.
+Run the `.exe`. The setup wizard walks through a welcome page, the Apache 2.0
+licence, the install location, and a finish page that offers to launch the app.
+
+It installs per-user by default, so no administrator rights are needed. For a
+per-machine rollout, deploy the `.msi` through Intune or Group Policy instead.
 The build is not code-signed, so SmartScreen shows a warning on first run — choose
 **More info → Run anyway**. To remove the warning for wider distribution, sign the
 binary with an EV code-signing certificate and set `signCommand` in `tauri.conf.json`.
@@ -66,9 +87,9 @@ the app → **Open** → **Open** to bypass Gatekeeper on the unsigned build.
 ### Linux
 
 ```bash
-sudo apt install -y ./sentinel-desktop_0.2.1_amd64.deb
+sudo apt install -y ./sentinel-desktop_0.3.0_amd64.deb
 # or
-chmod +x SentinelVAPT_0.2.1_amd64.AppImage && ./SentinelVAPT_0.2.1_amd64.AppImage
+chmod +x SentinelVAPT_0.3.0_amd64.AppImage && ./SentinelVAPT_0.3.0_amd64.AppImage
 ```
 
 ---
@@ -161,6 +182,20 @@ generate activity in that account's audit log.
 
 Both HTML reports are fully self-contained — inline styles, inline SVG charts, no
 scripts and no network requests — so they render offline and survive being emailed.
+
+### Adding the client's logo
+
+In **Report Builder → Branding & Attribution**, choose **Upload logo** and pick the
+client's image. It appears at the top of both the client and developer reports.
+
+- **Accepted:** PNG, JPEG, GIF and WebP, up to 2 MB.
+- **Not accepted:** SVG, and any remote URL. SVG can carry script, and a remote
+  image would leak the reader's IP address and render blank without a network —
+  neither belongs in a confidential security report.
+- The logo is embedded directly in the HTML, so it still displays offline and
+  when the file is forwarded on.
+- It is saved with the engagement, so you upload it once and every later report
+  for that client is branded automatically. **Remove** clears it.
 
 **To produce a PDF:** open the exported HTML in any browser and choose
 **Print → Save as PDF**. The stylesheet already sets A4 sizing, margins and page breaks.

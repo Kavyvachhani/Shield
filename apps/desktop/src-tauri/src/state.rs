@@ -14,6 +14,13 @@ pub struct ProjectRecord {
     pub id: String,
     pub company_name: String,
     pub logo_path: Option<String>,
+    /// The client's logo as a base64 `data:image/...` URI, stored inline so the
+    /// branding survives a restart and travels with the engagement rather than
+    /// depending on a file that may later move or be deleted.
+    ///
+    /// `default` keeps engagements saved before this field existed loadable.
+    #[serde(default)]
+    pub logo_data_uri: Option<String>,
     pub primary_color: Option<String>,
     pub name: String,
     pub created_at: DateTime<Utc>,

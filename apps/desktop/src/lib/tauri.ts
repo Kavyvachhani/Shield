@@ -10,7 +10,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   Project, Target, AuthorizationRecord, ScanRun, Finding,
   ReportRecord, GenerateReportOutput, FindingDetail, CoverageReport,
-  CreateProjectInput, CreateTargetInput, CreateRoEInput,
+  CreateProjectInput, CreateTargetInput, CreateRoEInput, SetProjectLogoInput,
   SetCredentialsInput, CredentialStatus,
   TriageInput, FindingFilter, GenerateReportInput,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
@@ -28,6 +28,9 @@ export const api = {
 
   getProject: (projectId: string): Promise<Project> =>
     invoke('get_project', { projectId }),
+
+  setProjectLogo: (input: SetProjectLogoInput): Promise<Project> =>
+    invoke('set_project_logo', { input }),
 
   // Targets
   createTarget: (input: CreateTargetInput): Promise<Target> =>

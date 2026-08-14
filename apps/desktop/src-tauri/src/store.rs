@@ -356,6 +356,7 @@ mod tests {
             id: "p1".into(),
             company_name: "Acme Corp".into(),
             logo_path: None,
+            logo_data_uri: None,
             primary_color: None,
             name: "Q3 assessment".into(),
             created_at: Utc::now(),

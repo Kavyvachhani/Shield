@@ -242,7 +242,13 @@ async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>)
         .unwrap_or_else(|| "(not recorded)".to_string());
 
     let mut ctx = ReportContext::new(&input.company_name, &input.target_name, &target_url);
-    ctx.logo_data_uri = input.logo_data_uri.clone();
+    // An explicit logo on the request wins; otherwise fall back to the one saved
+    // against the project, so reports stay branded without re-uploading it.
+    ctx.logo_data_uri = choose_logo(
+        input.logo_data_uri.clone(),
+        project_logo(&run, state).await,
+    );
+
     if let Some(analyst) = &input.analyst {
         if !analyst.trim().is_empty() {
             ctx.analyst = analyst.clone();
@@ -265,6 +271,36 @@ async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>)
     }
 
     ctx
+}
+
+/// Pick the logo for a report: the one supplied with the request if there is
+/// one, otherwise the engagement's saved logo.
+///
+/// Blank strings count as "not supplied" — the UI sends an empty value when a
+/// field is cleared, and treating that as a logo would blank out the branding
+/// the project already has.
+fn choose_logo(requested: Option<String>, project: Option<String>) -> Option<String> {
+    let usable = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+    usable(requested).or_else(|| usable(project))
+}
+
+/// The logo saved against the project this scan belongs to, following
+/// scan → target → project. Returns `None` at any broken link, so a report
+/// simply renders unbranded rather than failing.
+async fn project_logo(
+    run: &Option<crate::state::ScanRunRecord>,
+    state: &State<'_, AppState>,
+) -> Option<String> {
+    let target_id = &run.as_ref()?.target_id;
+    let project_id = state.targets.read().await.get(target_id)?.project_id.clone();
+    let logo = state
+        .projects
+        .read()
+        .await
+        .get(&project_id)?
+        .logo_data_uri
+        .clone();
+    logo.filter(|uri| !uri.trim().is_empty())
 }
 
 /// Coverage for a scan. Returns `None` when the scan run is unknown, so a report
@@ -306,6 +342,26 @@ mod tests {
         for expected in ["client", "developer", "sarif", "markdown", "json"] {
             assert!(REPORT_TYPES.contains(&expected), "{expected} must be offered");
         }
+    }
+
+    #[test]
+    fn a_logo_on_the_request_beats_the_saved_one() {
+        let chosen = choose_logo(Some("data:image/png;base64,NEW".into()), Some("data:image/png;base64,OLD".into()));
+        assert_eq!(chosen.unwrap(), "data:image/png;base64,NEW");
+    }
+
+    #[test]
+    fn the_engagement_logo_is_used_when_the_request_omits_one() {
+        let saved = Some("data:image/png;base64,SAVED".to_string());
+        assert_eq!(choose_logo(None, saved.clone()).unwrap(), "data:image/png;base64,SAVED");
+        // A cleared field arrives as an empty string, not as null.
+        assert_eq!(choose_logo(Some("   ".into()), saved).unwrap(), "data:image/png;base64,SAVED");
+    }
+
+    #[test]
+    fn a_report_with_no_logo_anywhere_stays_unbranded() {
+        assert!(choose_logo(None, None).is_none());
+        assert!(choose_logo(Some("".into()), Some("  ".into())).is_none());
     }
 
     #[test]

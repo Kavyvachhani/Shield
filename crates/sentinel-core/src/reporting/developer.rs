@@ -5,7 +5,7 @@
 //! fix it, and how do I verify the fix worked.
 
 use super::charts;
-use super::escape::{href, html, html_multiline};
+use super::escape::{href, html, html_multiline, image_data_uri};
 use super::{
     base_stylesheet, footer_html, remediation_window, sort_by_priority, ReportContext,
     SeverityCounts,
@@ -70,8 +70,16 @@ ol.steps code{background:#f1f5f9;padding:1px 5px;border-radius:4px;word-break:br
 }
 
 fn header(ctx: &ReportContext, counts: &SeverityCounts) -> String {
+    let logo = ctx
+        .logo_data_uri
+        .as_deref()
+        .and_then(image_data_uri)
+        .map(|uri| format!(r##"<img src="{uri}" alt="" style="max-height:44px;margin-bottom:16px">"##))
+        .unwrap_or_default();
+
     format!(
         r##"<header style="margin:24px 0 4px">
+  {logo}
   <div class="small muted" style="letter-spacing:2px;text-transform:uppercase">Technical Remediation Report</div>
   <h1 style="font-size:29px;margin:8px 0 6px">{target}</h1>
   <div class="muted">{company} · {url}</div>
@@ -91,6 +99,7 @@ fn header(ctx: &ReportContext, counts: &SeverityCounts) -> String {
     not just how severe it would be in theory.
   </div>
 </header>"##,
+        logo = logo,
         target = html(&ctx.target_name),
         company = html(&ctx.company_name),
         url = html(&ctx.target_url),
@@ -541,6 +550,27 @@ mod tests {
         let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
         assert!(out.starts_with("<!DOCTYPE html>"));
         assert!(out.trim_end().ends_with("</html>"));
+    }
+
+    /// A 1x1 PNG — the smallest valid logo payload.
+    const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+
+    #[test]
+    fn the_company_logo_is_embedded_in_the_header() {
+        let mut c = ctx();
+        c.logo_data_uri = Some(PNG.into());
+        let out = render(&c, &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(out.contains(PNG), "developer report must carry the client's logo");
+    }
+
+    #[test]
+    fn a_scriptable_logo_is_refused_rather_than_embedded() {
+        let mut c = ctx();
+        // SVG can carry script, so it must never reach the document.
+        c.logo_data_uri = Some("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=".into());
+        let out = render(&c, &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(!out.contains("svg+xml"));
+        assert!(!out.contains("<img"), "report should render unbranded instead");
     }
 
     #[test]

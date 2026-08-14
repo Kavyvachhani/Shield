@@ -13,7 +13,7 @@
 
 use crate::commands::auth::CreateRoEInput;
 use crate::commands::findings::{FindingFilter, TriageInput};
-use crate::commands::projects::CreateProjectInput;
+use crate::commands::projects::{CreateProjectInput, SetProjectLogoInput};
 use crate::commands::reports::{ExportReportInput, GenerateReportInput};
 use crate::commands::scan::TriggerScanInput;
 use crate::commands::targets::CreateTargetInput;
@@ -37,6 +37,24 @@ fn create_project_accepts_the_frontend_payload() {
     assert_eq!(input.company_name, "Acme Corporation");
     assert_eq!(input.name, "Q3 Assessment");
     assert_eq!(input.primary_color.as_deref(), Some("#2563eb"));
+}
+
+#[test]
+fn set_project_logo_accepts_the_frontend_payload() {
+    // Exactly what ReportBuilderScreen.tsx sends when a logo is uploaded.
+    let input: SetProjectLogoInput = serde_json::from_value(json!({
+        "projectId": "p-1",
+        "logoDataUri": "data:image/png;base64,iVBORw0KGgo=",
+    }))
+    .expect("frontend camelCase payload must deserialize");
+
+    assert_eq!(input.project_id, "p-1");
+    assert!(input.logo_data_uri.unwrap().starts_with("data:image/png"));
+
+    // Removing the logo sends null.
+    let cleared: SetProjectLogoInput =
+        serde_json::from_value(json!({ "projectId": "p-1", "logoDataUri": null })).unwrap();
+    assert!(cleared.logo_data_uri.is_none());
 }
 
 #[test]
@@ -218,6 +236,7 @@ fn project_record_serializes_the_keys_the_frontend_reads() {
         id: "p-1".into(),
         company_name: "Acme".into(),
         logo_path: None,
+        logo_data_uri: None,
         primary_color: None,
         name: "Q3".into(),
         created_at: Utc::now(),
