@@ -9,7 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   Project, Target, AuthorizationRecord, ScanRun, Finding,
-  ReportRecord, GenerateReportOutput,
+  ReportRecord, GenerateReportOutput, FindingDetail, CoverageReport,
   CreateProjectInput, CreateTargetInput, CreateRoEInput,
   TriageInput, FindingFilter, GenerateReportInput,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
@@ -68,6 +68,9 @@ export const api = {
   getFinding: (findingId: string): Promise<Finding> =>
     invoke('get_finding', { findingId }),
 
+  getFindingDetail: (findingId: string): Promise<FindingDetail> =>
+    invoke('get_finding_detail', { findingId }),
+
   triageFinding: (input: TriageInput): Promise<Finding> =>
     invoke('triage_finding', { input }),
 
@@ -75,11 +78,21 @@ export const api = {
   generateReport: (input: GenerateReportInput): Promise<GenerateReportOutput> =>
     invoke('generate_report', { input }),
 
-  exportReport: (reportId: string, exportPath: string, format: string): Promise<string> =>
-    invoke('export_report', { input: { reportId, exportPath, format } }),
+  exportReport: (reportId: string, exportPath: string): Promise<string> =>
+    invoke('export_report', { input: { reportId, exportPath } }),
 
   listReports: (scanId: string): Promise<ReportRecord[]> =>
     invoke('list_reports', { scanId }),
+
+  defaultExportDir: (): Promise<string> =>
+    invoke('default_export_dir'),
+
+  // Checklist coverage
+  getCoverage: (scanId: string): Promise<CoverageReport> =>
+    invoke('get_coverage', { scanId }),
+
+  getChecklistCatalog: (): Promise<unknown[]> =>
+    invoke('get_checklist_catalog'),
 };
 
 // ── Typed Event Listeners ─────────────────────────────────────────────────────

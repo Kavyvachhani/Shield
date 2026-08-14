@@ -1,218 +1,410 @@
-import { useState } from 'react';
-import { FileText, Download, Eye, Building2, Palette, Loader2 } from 'lucide-react';
-import type { Project, GenerateReportInput, GenerateReportOutput } from '../types';
+import { useEffect, useState } from 'react';
+import { Download, Eye, Loader2, FileText } from 'lucide-react';
+import type { GenerateReportInput, GenerateReportOutput, Project, ReportType } from '../types';
 import { api } from '../lib/tauri';
 
 interface Props {
   project: Project;
   scanId: string;
   targetName: string;
+  targetUrl?: string;
 }
 
-type Audience = 'executive' | 'developer' | 'sarif';
+interface ReportOption {
+  value: ReportType;
+  label: string;
+  audience: string;
+  desc: string;
+  icon: string;
+}
 
-const AUDIENCE_OPTS: { value: Audience; label: string; desc: string; icon: string }[] = [
-  { value: 'executive', label: 'Executive / Client Summary', desc: 'Business-language, ≤4 pages, severity heatmap, compliance snapshot. No CVSS vectors.', icon: '📊' },
-  { value: 'developer', label: 'Developer Remediation Guide', desc: 'Full technical detail: CVSS4 vectors, CWE/OWASP/WSTG IDs, repro steps, code fixes.', icon: '🔧' },
-  { value: 'sarif', label: 'SARIF 2.1.0 JSON', desc: 'Machine-readable for CI/CD integration, GitHub Advanced Security, and toolchain import.', icon: '⚙️' },
+const REPORT_OPTIONS: ReportOption[] = [
+  {
+    value: 'client',
+    label: 'Client Report',
+    audience: 'For the business',
+    desc: 'Posture score, plain-language risks, remediation roadmap, compliance alignment, and the full coverage matrix showing every check performed — including the ones that passed.',
+    icon: '📊',
+  },
+  {
+    value: 'developer',
+    label: 'Developer Report',
+    audience: 'For the engineers',
+    desc: 'One section per finding: exact location, CVSS 4.0 vector, CWE/OWASP/WSTG mapping, reproduction steps, sanitized evidence, the fix, and how to verify it.',
+    icon: '🔧',
+  },
+  {
+    value: 'markdown',
+    label: 'Markdown Export',
+    audience: 'For your tracker',
+    desc: 'The developer report as Markdown, one heading per finding — paste straight into Jira, Linear or a GitHub issue.',
+    icon: '📝',
+  },
+  {
+    value: 'sarif',
+    label: 'SARIF 2.1.0',
+    audience: 'For CI/CD',
+    desc: 'Machine-readable results for GitHub code scanning, Azure DevOps and any SARIF-consuming pipeline.',
+    icon: '⚙️',
+  },
+  {
+    value: 'json',
+    label: 'Full JSON Export',
+    audience: 'For archival',
+    desc: 'Complete assessment data: engagement metadata, every finding, and the coverage matrix.',
+    icon: '🗄️',
+  },
 ];
 
-export function ReportBuilderScreen({ project, scanId, targetName }: Props) {
-  const [audience, setAudience]       = useState<Audience>('executive');
+export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: Props) {
+  const [reportType, setReportType] = useState<ReportType>('client');
   const [companyName, setCompanyName] = useState(project.companyName);
-  const [primaryColor, setPrimaryColor] = useState(project.primaryColor ?? '#22d3ee');
-  const [generating, setGenerating]   = useState(false);
-  const [report, setReport]           = useState<GenerateReportOutput | null>(null);
-  const [preview, setPreview]         = useState(false);
-  const [exporting, setExporting]     = useState(false);
-  const [exportMsg, setExportMsg]     = useState('');
-  const [error, setError]             = useState('');
+  const [analyst, setAnalyst] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [report, setReport] = useState<GenerateReportOutput | null>(null);
+  const [preview, setPreview] = useState(false);
+  const [exportDir, setExportDir] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.defaultExportDir().then(setExportDir).catch(() => setExportDir(''));
+  }, []);
+
+  // A newly chosen report type invalidates whatever was generated before.
+  useEffect(() => {
+    setReport(null);
+    setPreview(false);
+    setExportMsg('');
+  }, [reportType]);
+
+  const isHtml = report?.contentType === 'text/html';
 
   async function generate() {
-    setError(''); setReport(null); setPreview(false);
+    setError('');
+    setReport(null);
+    setPreview(false);
+    setExportMsg('');
     setGenerating(true);
     try {
       const input: GenerateReportInput = {
         scanId,
-        reportType: audience,
+        reportType,
         companyName: companyName.trim() || project.companyName,
         targetName,
-        logoPath: project.logoPath,
+        targetUrl,
+        analyst: analyst.trim() || undefined,
       };
-      const out = await api.generateReport(input);
-      setReport(out);
-    } catch (err) { setError(String(err)); }
-    finally { setGenerating(false); }
+      setReport(await api.generateReport(input));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  async function exportReport(format: string) {
+  async function saveToDisk() {
     if (!report) return;
-    setExporting(true); setExportMsg('');
-    const ext = format === 'json' ? '.json' : format === 'sarif' ? '.sarif' : '.html';
-    const filename = `SentinelVAPT_${audience}_${Date.now()}${ext}`;
-    // In a real Tauri app we'd use dialog.save() — for now use a known path
-    const exportPath = `/tmp/${filename}`;
+    setExporting(true);
+    setExportMsg('');
+    setError('');
     try {
-      const msg = await api.exportReport(report.reportId, exportPath, format);
-      setExportMsg(msg);
-    } catch (err) { setError(String(err)); }
-    finally { setExporting(false); }
+      const separator = exportDir.includes('\\') ? '\\' : '/';
+      const path = exportDir
+        ? `${exportDir.replace(/[\\/]+$/, '')}${separator}${report.suggestedFilename}`
+        : report.suggestedFilename;
+      setExportMsg(await api.exportReport(report.reportId, path));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
-    <div style={{ padding: '24px 28px', display: 'flex', gap: 24, height: '100%', overflow: 'hidden' }} className="fade-in">
-      {/* LEFT: Builder controls */}
-      <div style={{ flex: '0 0 340px', display: 'flex', flexDirection: 'column', gap: 20, overflow: 'auto' }}>
+    <div
+      className="fade-in"
+      style={{ padding: '24px 28px', display: 'flex', gap: 24, height: '100%', overflow: 'hidden' }}
+    >
+      <div style={{ flex: '0 0 360px', display: 'flex', flexDirection: 'column', gap: 20, overflow: 'auto' }}>
         <div>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Report Builder</h2>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Generate branded deliverables from the scan findings</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+            Two deliverables from one assessment — one for the client, one for the engineers.
+          </div>
         </div>
 
-        {/* Audience selector */}
-        <BuilderSection title="Report Audience">
+        <Section title="Deliverable">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {AUDIENCE_OPTS.map((o) => (
-              <button key={o.value} type="button" onClick={() => setAudience(o.value)} style={{
-                padding: '12px 14px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', textAlign: 'left',
-                border: `1px solid ${audience === o.value ? 'rgba(34,211,238,0.4)' : 'var(--border-strong)'}`,
-                background: audience === o.value ? 'rgba(34,211,238,0.06)' : 'var(--bg-elevated)',
-                transition: 'all 0.15s',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 16 }}>{o.icon}</span>
-                  <span style={{ fontWeight: 700, fontSize: 13, color: audience === o.value ? 'var(--cyan)' : 'var(--text-primary)' }}>{o.label}</span>
-                </div>
-                <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{o.desc}</p>
-              </button>
-            ))}
+            {REPORT_OPTIONS.map((o) => {
+              const selected = reportType === o.value;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => setReportType(o.value)}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    border: `1px solid ${selected ? 'rgba(34,211,238,0.4)' : 'var(--border-strong)'}`,
+                    background: selected ? 'rgba(34,211,238,0.06)' : 'var(--bg-elevated)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span aria-hidden="true">{o.icon}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{o.label}</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                      {o.audience}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{o.desc}</div>
+                </button>
+              );
+            })}
           </div>
-        </BuilderSection>
+        </Section>
 
-        {/* Branding */}
-        {audience !== 'sarif' && (
-          <BuilderSection title="Branding">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={labelStyle}><Building2 size={11} style={{ display: 'inline', marginRight: 4 }} /> Client Name</label>
-                <input value={companyName} onChange={(e) => setCompanyName(e.target.value)}
-                  style={inputStyle} placeholder={project.companyName} />
-              </div>
-              <div>
-                <label style={labelStyle}><Palette size={11} style={{ display: 'inline', marginRight: 4 }} /> Brand Accent Color</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input type="color" value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)}
-                    style={{ width: 36, height: 36, border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', padding: 3, background: 'var(--bg-elevated)', cursor: 'pointer' }} />
-                  <input value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)}
-                    style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }} />
-                </div>
-              </div>
-            </div>
-          </BuilderSection>
-        )}
-
-        {error && (
-          <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: '#fca5a5', fontSize: 12 }}>
-            {error}
-          </div>
-        )}
+        <Section title="Branding & Attribution">
+          <Field label="Client name">
+            <input
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder={project.companyName}
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="Assessed by (optional)">
+            <input
+              value={analyst}
+              onChange={(e) => setAnalyst(e.target.value)}
+              placeholder="Your name or team"
+              style={inputStyle}
+            />
+          </Field>
+        </Section>
 
         <button
-          onClick={generate} disabled={generating}
-          style={{ padding: '13px 20px', background: generating ? 'var(--bg-elevated)' : 'var(--cyan)', color: generating ? 'var(--text-muted)' : '#020817', border: 'none', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 14, cursor: generating ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, transition: 'all 0.15s', boxShadow: generating ? 'none' : '0 4px 16px rgba(34,211,238,0.2)' }}
+          type="button"
+          onClick={generate}
+          disabled={generating}
+          style={{
+            ...primaryButton,
+            opacity: generating ? 0.6 : 1,
+            cursor: generating ? 'wait' : 'pointer',
+          }}
         >
-          {generating ? <><Loader2 size={16} className="pulse" /> Generating...</> : <><FileText size={16} /> Generate Report</>}
+          {generating ? <Loader2 size={15} className="spin" /> : <FileText size={15} />}
+          {generating ? 'Generating…' : 'Generate report'}
         </button>
 
-        {/* Export actions */}
         {report && (
-          <BuilderSection title="Export">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {audience === 'sarif' ? (
-                <ExportBtn label="Export SARIF JSON" format="json" onExport={exportReport} loading={exporting} />
-              ) : (
-                <>
-                  <ExportBtn label="Export HTML" format="html" onExport={exportReport} loading={exporting} />
-                  <ExportBtn label="Export JSON" format="json" onExport={exportReport} loading={exporting} />
-                </>
-              )}
-              {exportMsg && (
-                <div style={{ padding: '8px 12px', background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--emerald)', fontSize: 11 }}>
-                  ✓ {exportMsg}
-                </div>
+          <Section title="Export">
+            <Field label="Destination folder">
+              <input
+                value={exportDir}
+                onChange={(e) => setExportDir(e.target.value)}
+                placeholder="Folder to save into"
+                style={inputStyle}
+              />
+            </Field>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+              Saves as <code>{report.suggestedFilename}</code>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={saveToDisk}
+                disabled={exporting}
+                style={{ ...primaryButton, flex: 1, opacity: exporting ? 0.6 : 1 }}
+              >
+                {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+                Save
+              </button>
+              {isHtml && (
+                <button
+                  type="button"
+                  onClick={() => setPreview((p) => !p)}
+                  style={{ ...secondaryButton, flex: 1 }}
+                >
+                  <Eye size={15} />
+                  {preview ? 'Hide' : 'Preview'}
+                </button>
               )}
             </div>
-          </BuilderSection>
+            {isHtml && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.6 }}>
+                To produce a PDF, open the saved HTML file in your browser and choose
+                Print → Save as PDF. The report is styled for A4 with page breaks already set.
+              </div>
+            )}
+          </Section>
         )}
+
+        {exportMsg && <Notice tone="ok">{exportMsg}</Notice>}
+        {error && <Notice tone="error">{error}</Notice>}
       </div>
 
-      {/* RIGHT: Preview pane */}
-      <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Eye size={14} style={{ color: 'var(--cyan)' }} />
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
-            {report ? `Preview: ${AUDIENCE_OPTS.find(o => o.value === report.reportType)?.label ?? report.reportType}` : 'Report Preview'}
-          </span>
-          {report && (
-            <button onClick={() => setPreview(v => !v)} style={{ marginLeft: 'auto', padding: '4px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11 }}>
-              {preview ? 'Show HTML' : 'Show Rendered'}
-            </button>
-          )}
-        </div>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--bg-elevated)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {!report && (
+          <Placeholder>
+            Choose a deliverable and select <strong>Generate report</strong> to see it here.
+          </Placeholder>
+        )}
 
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {!report ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', gap: 12 }}>
-              <FileText size={48} style={{ opacity: 0.15 }} />
-              <p style={{ textAlign: 'center', fontSize: 12 }}>
-                Configure report settings<br />and click <strong style={{ color: 'var(--text-secondary)' }}>Generate Report</strong> to preview.
-              </p>
-            </div>
-          ) : preview ? (
-            <iframe
-              srcDoc={report.htmlContent}
-              style={{ width: '100%', height: '100%', border: 'none', background: 'white' }}
-              title="Report Preview"
-              sandbox="allow-same-origin"
-            />
-          ) : (
-            <pre style={{ padding: '16px', fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.6, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {report.htmlContent}
-            </pre>
-          )}
-        </div>
+        {report && !isHtml && (
+          <pre
+            style={{
+              margin: 0,
+              padding: 18,
+              overflow: 'auto',
+              fontSize: 11,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {report.content}
+          </pre>
+        )}
+
+        {report && isHtml && !preview && (
+          <Placeholder>
+            {report.findingCount} finding{report.findingCount === 1 ? '' : 's'} included.
+            Select <strong>Preview</strong> to render the report, or <strong>Save</strong> to write it to disk.
+          </Placeholder>
+        )}
+
+        {report && isHtml && preview && (
+          // The report is rendered in a sandboxed frame with no allow-scripts:
+          // report content is derived from the assessed target and must never
+          // execute inside the application.
+          <iframe
+            title="Report preview"
+            sandbox=""
+            srcDoc={report.content}
+            style={{ border: 'none', width: '100%', height: '100%', background: '#fff' }}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function BuilderSection({ title, children }: { title: string; children: React.ReactNode }) {
+// ── Small presentational helpers ─────────────────────────────────────────────
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--border-strong)',
+  background: 'var(--bg-base)',
+  color: 'inherit',
+  fontSize: 12,
+};
+
+const primaryButton: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '10px 14px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid rgba(34,211,238,0.4)',
+  background: 'rgba(34,211,238,0.12)',
+  color: 'inherit',
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const secondaryButton: React.CSSProperties = {
+  ...primaryButton,
+  border: '1px solid var(--border-strong)',
+  background: 'var(--bg-elevated)',
+};
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 10 }}>{title}</div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: 0.8,
+          textTransform: 'uppercase',
+          color: 'var(--text-muted)',
+          marginBottom: 8,
+        }}
+      >
+        {title}
+      </div>
       {children}
     </div>
   );
 }
 
-function ExportBtn({ label, format, onExport, loading }: { label: string; format: string; onExport: (f: string) => void; loading: boolean }) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button
-      onClick={() => onExport(format)} disabled={loading}
-      style={{ padding: '9px 16px', background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Download size={13} /> {loading ? 'Exporting...' : label}
-    </button>
+    <label style={{ display: 'block', marginBottom: 10 }}>
+      <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }
 
-const labelStyle: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600,
-  color: 'var(--text-muted)', marginBottom: 6,
-  letterSpacing: '0.04em', textTransform: 'uppercase',
-};
+function Notice({ tone, children }: { tone: 'ok' | 'error'; children: React.ReactNode }) {
+  const ok = tone === 'ok';
+  return (
+    <div
+      role={ok ? 'status' : 'alert'}
+      style={{
+        padding: '10px 12px',
+        borderRadius: 'var(--radius-sm)',
+        fontSize: 11,
+        lineHeight: 1.6,
+        wordBreak: 'break-word',
+        border: `1px solid ${ok ? 'rgba(22,163,74,0.4)' : 'rgba(220,38,38,0.4)'}`,
+        background: ok ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px',
-  background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',
-  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
-  fontSize: 13, outline: 'none',
-};
+function Placeholder({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 40,
+        textAlign: 'center',
+        fontSize: 12,
+        lineHeight: 1.7,
+        color: 'var(--text-muted)',
+      }}
+    >
+      <div style={{ maxWidth: 380 }}>{children}</div>
+    </div>
+  );
+}

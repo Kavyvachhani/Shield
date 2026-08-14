@@ -1,7 +1,7 @@
 use tauri::State;
 use serde::Deserialize;
 use chrono::Utc;
-use crate::state::{AppState, ScanRunRecord, ScanRunStatus, FindingRecord, new_id};
+use crate::state::{AppState, ScanRunRecord, ScanRunStatus, StoredFinding, new_id};
 use crate::event_bridge::*;
 
 #[derive(Debug, Deserialize)]
@@ -44,12 +44,14 @@ pub async fn trigger_scan(
         started_at: Utc::now(),
         completed_at: None,
         finding_count: 0,
+        engines_executed: Vec::new(),
         error: None,
     };
     state.scan_runs.write().await.insert(scan_run_id.clone(), run_record);
 
     let scan_runs_clone = state.scan_runs.clone();
     let findings_clone = state.findings.clone();
+    let scan_engines_clone = state.scan_engines.clone();
     let auth_records_clone = state.auth_records.clone();
     let targets_clone = state.targets.clone();
     let _active_scans_clone = state.active_scans.clone();
@@ -102,9 +104,13 @@ pub async fn trigger_scan(
         let auth_record = auth_records_clone.read().await.get(&target_id_clone).cloned();
         let core_target = build_core_target(&target_rec, auth_record);
 
-        let stages = ["semgrep", "trivy", "gitleaks", "zap_dast", "nuclei_dast"];
-        let stage_count = if run_dast { 5 } else { 3 };
-        let mut cumulative_findings: Vec<FindingRecord> = Vec::new();
+        // The native engine leads the dynamic stages: it is always available, so
+        // a target with no third-party scanners installed still gets a real
+        // assessment rather than three skipped stages.
+        let stages = ["semgrep", "trivy", "gitleaks", "native", "zap_dast", "nuclei_dast"];
+        let stage_count = if run_dast { 6 } else { 3 };
+        let mut total_findings = 0usize;
+        let mut engines_executed: Vec<String> = Vec::new();
 
         for (idx, stage_name) in stages.iter().take(stage_count).enumerate() {
             let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
@@ -112,9 +118,9 @@ pub async fn trigger_scan(
                 stage: stage_name.to_string(),
                 state: "running".into(),
                 stage_findings: 0,
-                total_findings: cumulative_findings.len(),
+                total_findings,
                 timestamp: Utc::now(),
-                message: format!("Starting {} scan...", stage_name),
+                message: format!("Starting {} scan...", engine_label(stage_name)),
             });
 
             let _ = app.emit(EVENT_LOG, ScanLogPayload {
@@ -130,42 +136,33 @@ pub async fn trigger_scan(
             match stage_result {
                 Ok(raw_findings) => {
                     let stage_finding_count = raw_findings.len();
-                    for f in raw_findings {
-                        let record = FindingRecord {
-                            id: f.id.to_string(),
-                            scan_id: run_id_clone.clone(),
-                            target_id: target_id_clone.clone(),
-                            title: f.title.clone(),
-                            description: f.description.clone(),
-                            severity: format!("{:?}", f.severity),
-                            cvss4_score: f.cvss4.as_ref().map(|c| c.base_score as f32).unwrap_or(0.0),
-                            epss_score: f.epss.as_ref().map(|e| e.score as f32).unwrap_or(0.0),
-                            kev_listed: f.kev_listed,
-                            priority_score: f.priority_score as f32,
-                            cwe_id: f.cwe_id.clone(),
-                            owasp_2025: f.owasp_2025.clone(),
-                            wstg_id: f.wstg_id.clone(),
-                            affected_component: f.affected_component.clone(),
-                            repro_steps: f.repro_steps.clone(),
-                            remediation: f.remediation.clone(),
-                            status: "Open".into(),
-                            source_tools: f.source_tools.clone(),
-                            triage_note: None,
-                            priority_rationale: f.priority_rationale.clone(),
-                            created_at: f.created_at,
-                        };
-                        cumulative_findings.push(record.clone());
-                        findings_clone.write().await.insert(record.id.clone(), record);
+                    // The stage completed, so its engine counts as coverage even
+                    // when it produced nothing — a clean pass is a real result.
+                    engines_executed.push(engine_name(stage_name).to_string());
+
+                    {
+                        let mut store = findings_clone.write().await;
+                        for f in raw_findings {
+                            store.insert(
+                                f.id.to_string(),
+                                StoredFinding {
+                                    scan_id: run_id_clone.clone(),
+                                    finding: f,
+                                    triage_note: None,
+                                },
+                            );
+                        }
                     }
+                    total_findings += stage_finding_count;
 
                     let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
                         scan_run_id: run_id_clone.clone(),
                         stage: stage_name.to_string(),
                         state: "done".into(),
                         stage_findings: stage_finding_count,
-                        total_findings: cumulative_findings.len(),
+                        total_findings,
                         timestamp: Utc::now(),
-                        message: format!("{} complete: {} findings", stage_name, stage_finding_count),
+                        message: format!("{} complete: {} findings", engine_label(stage_name), stage_finding_count),
                     });
                 }
                 Err(e) => {
@@ -177,7 +174,7 @@ pub async fn trigger_scan(
                         stage: stage_name.to_string(),
                         state: stage_state.into(),
                         stage_findings: 0,
-                        total_findings: cumulative_findings.len(),
+                        total_findings,
                         timestamp: Utc::now(),
                         message: msg.clone(),
                     });
@@ -192,13 +189,18 @@ pub async fn trigger_scan(
             }
         }
 
-        let total = cumulative_findings.len();
+        let total = total_findings;
+        scan_engines_clone
+            .write()
+            .await
+            .insert(run_id_clone.clone(), engines_executed.clone());
         {
             let mut runs = scan_runs_clone.write().await;
             if let Some(r) = runs.get_mut(&run_id_clone) {
                 r.status = ScanRunStatus::Completed;
                 r.completed_at = Some(Utc::now());
                 r.finding_count = total;
+                r.engines_executed = engines_executed;
             }
         }
 
@@ -287,10 +289,55 @@ async fn run_stage_for(
 
     match stage {
         "semgrep"     => sentinel_adapters::semgrep::SemgrepAdapter.run(target, config_json).await,
+        "native"      => AuthGatedDastRunner::new(sentinel_adapters::native::NativeCheckAdapter).run(target, config_json).await,
         "trivy"       => sentinel_adapters::trivy::TrivyAdapter.run(target, config_json).await,
         "gitleaks"    => sentinel_adapters::gitleaks::GitleaksAdapter.run(target, config_json).await,
         "zap_dast"    => AuthGatedDastRunner::new(sentinel_adapters::zap::ZapDastAdapter).run(target, config_json).await,
         "nuclei_dast" => AuthGatedDastRunner::new(sentinel_adapters::nuclei::NucleiDastAdapter).run(target, config_json).await,
         other => Err(anyhow::anyhow!("Unknown stage: {}", other)),
+    }
+}
+
+/// Engine name as used by the checklist coverage catalog.
+fn engine_name(stage: &str) -> &'static str {
+    match stage {
+        "semgrep" => "Semgrep",
+        "trivy" => "Trivy",
+        "gitleaks" => "Gitleaks",
+        "native" => "Sentinel Native",
+        "zap_dast" => "OWASP ZAP",
+        "nuclei_dast" => "Nuclei",
+        _ => "Unknown",
+    }
+}
+
+/// Human-readable stage label for the scan console.
+fn engine_label(stage: &str) -> &'static str {
+    match stage {
+        "semgrep" => "Semgrep SAST",
+        "trivy" => "Trivy dependency audit",
+        "gitleaks" => "Gitleaks secret scan",
+        "native" => "Sentinel Native checks",
+        "zap_dast" => "OWASP ZAP DAST",
+        "nuclei_dast" => "Nuclei DAST",
+        _ => "Unknown stage",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_stage_maps_to_a_catalog_engine_name() {
+        for stage in ["semgrep", "trivy", "gitleaks", "native", "zap_dast", "nuclei_dast"] {
+            assert_ne!(engine_name(stage), "Unknown", "{stage} has no engine mapping");
+            assert_ne!(engine_label(stage), "Unknown stage", "{stage} has no label");
+        }
+    }
+
+    #[test]
+    fn native_stage_name_matches_the_checklist_catalog() {
+        assert_eq!(engine_name("native"), sentinel_core::checklist::catalog::engine::NATIVE);
     }
 }

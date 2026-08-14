@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod checklist;
 pub mod models;
 pub mod parser;
 pub mod dedup;

@@ -12,6 +12,7 @@
 
 use crate::adapter_trait::ScannerAdapter;
 use crate::auth_gated_runner::AuthGatedDastRunner;
+use crate::native::NativeCheckAdapter;
 use crate::zap::ZapDastAdapter;
 use crate::nuclei::NucleiDastAdapter;
 use crate::semgrep::SemgrepAdapter;
@@ -33,8 +34,37 @@ pub enum ScanStage {
     Semgrep,
     Trivy,
     Gitleaks,
+    /// Built-in check engine. Always available, so it anchors DAST coverage
+    /// even when no third-party scanner is installed.
+    NativeChecks,
     ZapDast,
     NucleiDast,
+}
+
+impl ScanStage {
+    /// Engine name as used by the checklist coverage catalog.
+    pub fn engine_name(&self) -> &'static str {
+        match self {
+            ScanStage::Semgrep => "Semgrep",
+            ScanStage::Trivy => "Trivy",
+            ScanStage::Gitleaks => "Gitleaks",
+            ScanStage::NativeChecks => "Sentinel Native",
+            ScanStage::ZapDast => "OWASP ZAP",
+            ScanStage::NucleiDast => "Nuclei",
+        }
+    }
+
+    /// Human-readable stage label for the scan console.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ScanStage::Semgrep => "Semgrep SAST",
+            ScanStage::Trivy => "Trivy dependency audit",
+            ScanStage::Gitleaks => "Gitleaks secret scan",
+            ScanStage::NativeChecks => "Sentinel Native checks",
+            ScanStage::ZapDast => "OWASP ZAP DAST",
+            ScanStage::NucleiDast => "Nuclei DAST",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,8 +94,18 @@ pub struct ScanRunResult {
     pub final_state: ScanRunState,
     pub all_findings: Vec<Finding>,
     pub stage_results: Vec<StageResult>,
+    /// Engine names that genuinely executed. Drives the checklist coverage
+    /// matrix, so a skipped stage must never appear here.
+    pub engines_executed: Vec<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
+}
+
+impl ScanRunResult {
+    /// Coverage assessment across the WSTG catalog for this run.
+    pub fn coverage(&self) -> sentinel_core::checklist::CoverageReport {
+        sentinel_core::checklist::ChecklistEngine::assess(&self.engines_executed, &self.all_findings)
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +207,24 @@ impl ScanOrchestrator {
         if run_dast {
             tracing::info!("Orchestrator: Starting DAST stages (auth gate will be enforced)");
 
+            // Sentinel Native — built-in engine, always available. Runs first so
+            // that a target with no third-party scanners installed still yields
+            // a substantive assessment.
+            let gated_native = AuthGatedDastRunner::new(NativeCheckAdapter);
+            let native_result = run_stage(
+                ScanStage::NativeChecks,
+                &gated_native,
+                target,
+                config_json,
+                &emit,
+                &all_findings,
+            ).await;
+            let native_count = native_result.findings.len();
+            all_findings.extend(native_result.findings.iter().cloned());
+            stage_results.push(native_result);
+            emit(ScanRunState::Running { stage: ScanStage::NativeChecks },
+                 "Sentinel Native checks complete", native_count, all_findings.len());
+
             // ZAP DAST — always wrapped in AuthGatedDastRunner
             let gated_zap = AuthGatedDastRunner::new(ZapDastAdapter);
             let zap_result = run_stage(
@@ -205,12 +263,21 @@ impl ScanOrchestrator {
         let final_state = ScanRunState::Completed;
         emit(final_state.clone(), "All stages complete", 0, all_findings.len());
 
+        // Only stages that ran to completion count as coverage. A skipped or
+        // failed stage must not let the report claim its checks were performed.
+        let engines_executed: Vec<String> = stage_results
+            .iter()
+            .filter(|s| !s.skipped && s.error.is_none())
+            .map(|s| s.stage.engine_name().to_string())
+            .collect();
+
         Ok(ScanRunResult {
             scan_run_id,
             target_id: target.id,
             final_state,
             all_findings,
             stage_results,
+            engines_executed,
             started_at,
             completed_at: Utc::now(),
         })
@@ -326,6 +393,16 @@ mod tests {
         assert_eq!(run.final_state, ScanRunState::Completed);
         // All stages should have been attempted (skipped if tool absent)
         assert_eq!(run.stage_results.len(), 3, "3 static stages expected");
+        // A skipped stage must never be reported as executed coverage.
+        for stage in &run.stage_results {
+            if stage.skipped {
+                assert!(
+                    !run.engines_executed.contains(&stage.stage.engine_name().to_string()),
+                    "{:?} was skipped but is listed as an executed engine",
+                    stage.stage
+                );
+            }
+        }
     }
 
     #[tokio::test]

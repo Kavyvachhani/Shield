@@ -13,6 +13,10 @@ pub mod gitleaks;
 pub mod zap;
 pub mod nuclei;
 
+// Built-in check engine — ships with the app, needs no external binary.
+// Also always used via AuthGatedDastRunner: it issues live HTTP requests.
+pub mod native;
+
 #[cfg(test)]
 pub mod keychain_test;
 

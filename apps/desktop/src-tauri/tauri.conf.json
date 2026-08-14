@@ -57,6 +57,27 @@
       "frameworks": [],
       "minimumSystemVersion": "11.0",
       "exceptionDomain": ""
-    }
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "allowDowngrades": true,
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": [
+          "en-US"
+        ]
+      }
+    },
+    "publisher": "SentinelVAPT",
+    "copyright": "SentinelVAPT \u2014 defensive application security tooling"
   }
 }

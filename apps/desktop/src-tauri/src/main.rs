@@ -35,11 +35,16 @@ fn main() {
             // Findings
             commands::findings::list_findings,
             commands::findings::get_finding,
+            commands::findings::get_finding_detail,
             commands::findings::triage_finding,
             // Reports
             commands::reports::generate_report,
             commands::reports::export_report,
+            commands::reports::default_export_dir,
             commands::reports::list_reports,
+            // Checklist coverage
+            commands::reports::get_coverage,
+            commands::reports::get_checklist_catalog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SentinelVAPT desktop application");

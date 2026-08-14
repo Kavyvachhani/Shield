@@ -1,80 +1,106 @@
-use tauri::State;
-use serde::{Deserialize, Serialize};
+use crate::state::{new_id, AppState, ReportRecord};
 use chrono::Utc;
-use crate::state::{AppState, FindingRecord, ReportRecord, new_id};
-use sentinel_core::reporting::ReportEngine;
-use sentinel_core::models::finding::{
-    Finding, Severity, FindingStatus, CVSS4Data, EPSSData
-};
-use uuid::Uuid;
+use sentinel_core::checklist::{ChecklistEngine, CoverageReport};
+use sentinel_core::models::finding::Finding;
+use sentinel_core::reporting::{ReportContext, ReportEngine};
+use serde::{Deserialize, Serialize};
+use tauri::State;
 
 #[derive(Debug, Deserialize)]
 pub struct GenerateReportInput {
     pub scan_id: String,
-    pub report_type: String,    // "executive" | "developer" | "sarif"
+    /// "client" | "developer" | "sarif" | "markdown" | "json"
+    pub report_type: String,
     pub company_name: String,
     pub target_name: String,
-    pub logo_path: Option<String>,
+    pub target_url: Option<String>,
+    pub analyst: Option<String>,
+    /// Base64 `data:image/...` logo. Non-image or remote values are ignored.
+    pub logo_data_uri: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct GenerateReportOutput {
     pub report_id: String,
     pub report_type: String,
-    pub html_content: String,
+    pub content: String,
+    /// MIME type so the UI knows whether to render or download.
+    pub content_type: String,
+    pub suggested_filename: String,
+    pub finding_count: usize,
 }
+
+/// Report types the engine can produce.
+const REPORT_TYPES: &[&str] = &["client", "developer", "sarif", "markdown", "json"];
 
 #[tauri::command]
 pub async fn generate_report(
     input: GenerateReportInput,
     state: State<'_, AppState>,
 ) -> Result<GenerateReportOutput, String> {
-    // Fetch findings for this scan
-    let findings_map = state.findings.read().await;
-    let raw: Vec<FindingRecord> = findings_map.values()
-        .filter(|f| f.scan_id == input.scan_id)
-        .cloned()
-        .collect();
-
-    if raw.is_empty() {
-        return Err(format!("No findings found for scan '{}'", input.scan_id));
+    if !REPORT_TYPES.contains(&input.report_type.as_str()) {
+        return Err(format!(
+            "Unknown report type '{}'. Expected one of: {}",
+            input.report_type,
+            REPORT_TYPES.join(", ")
+        ));
     }
 
-    // Convert FindingRecord → sentinel_core Finding for the report engine
-    let core_findings: Vec<Finding> = raw.iter().map(|f| finding_record_to_core(f)).collect();
-
-    let html = match input.report_type.as_str() {
-        "executive" => ReportEngine::generate_client_report_html(
-            &input.company_name,
-            input.logo_path.as_deref(),
-            &input.target_name,
-            &core_findings,
-        ),
-        "developer" => ReportEngine::generate_developer_report_html(
-            &input.target_name,
-            &core_findings,
-        ),
-        "sarif" => ReportEngine::generate_sarif_json(&core_findings),
-        other => return Err(format!("Unknown report type '{}'. Use executive | developer | sarif", other)),
+    let findings: Vec<Finding> = {
+        let store = state.findings.read().await;
+        store
+            .values()
+            .filter(|s| s.scan_id == input.scan_id)
+            .map(|s| s.finding.clone())
+            .collect()
     };
 
-    // Safety assertion: no secret material in output
-    for finding in &raw {
-        for _tool in &finding.source_tools {
-            if html.contains("AKIAIOSFODNN7EXAMPLE") ||
-               html.contains("ghp_") ||
-               html.contains("sk-") {
-                return Err("Report generation aborted: potential secret material detected in output".into());
-            }
-        }
-    }
+    let ctx = build_context(&input, &state).await;
+    let coverage = build_coverage(&input.scan_id, &findings, &state).await;
+
+    let (content, content_type, extension) = match input.report_type.as_str() {
+        "client" => (
+            ReportEngine::client_report(&ctx, &findings, coverage.as_ref()),
+            "text/html",
+            "html",
+        ),
+        "developer" => (
+            ReportEngine::developer_report(&ctx, &findings, coverage.as_ref()),
+            "text/html",
+            "html",
+        ),
+        "sarif" => (
+            ReportEngine::generate_sarif_json(&findings),
+            "application/sarif+json",
+            "sarif",
+        ),
+        "markdown" => (
+            ReportEngine::developer_markdown(&ctx, &findings),
+            "text/markdown",
+            "md",
+        ),
+        "json" => (
+            ReportEngine::generate_json(&ctx, &findings, coverage.as_ref()),
+            "application/json",
+            "json",
+        ),
+        other => return Err(format!("Unhandled report type '{other}'")),
+    };
+
+    let suggested_filename = format!(
+        "{}-{}-{}.{}",
+        sanitize_filename(&input.company_name),
+        input.report_type,
+        Utc::now().format("%Y%m%d"),
+        extension
+    );
 
     let report = ReportRecord {
         id: new_id(),
-        scan_id: input.scan_id,
+        scan_id: input.scan_id.clone(),
         report_type: input.report_type.clone(),
-        company_name: input.company_name,
-        html_content: html.clone(),
+        company_name: input.company_name.clone(),
+        html_content: content.clone(),
         created_at: Utc::now(),
     };
     let report_id = report.id.clone();
@@ -83,15 +109,63 @@ pub async fn generate_report(
     Ok(GenerateReportOutput {
         report_id,
         report_type: input.report_type,
-        html_content: html,
+        content,
+        content_type: content_type.to_string(),
+        suggested_filename,
+        finding_count: findings.len(),
     })
+}
+
+/// The coverage matrix for a scan, or `None` when the scan is unknown.
+#[tauri::command]
+pub async fn get_coverage(
+    scan_id: String,
+    state: State<'_, AppState>,
+) -> Result<CoverageReport, String> {
+    let findings: Vec<Finding> = {
+        let store = state.findings.read().await;
+        store
+            .values()
+            .filter(|s| s.scan_id == scan_id)
+            .map(|s| s.finding.clone())
+            .collect()
+    };
+    build_coverage(&scan_id, &findings, &state)
+        .await
+        .ok_or_else(|| format!("No scan run recorded for '{scan_id}'"))
+}
+
+/// The full WSTG catalog, for the checklist screen before any scan has run.
+#[tauri::command]
+pub async fn get_checklist_catalog() -> Result<serde_json::Value, String> {
+    serde_json::to_value(sentinel_core::checklist::catalog::WSTG_CATALOG)
+        .map_err(|e| format!("Failed to serialise the checklist catalog: {e}"))
+}
+
+/// A sensible default folder to export into, resolved per platform.
+///
+/// Prefers the user's Downloads folder, then Documents, then the home
+/// directory. Returned as a string so the UI can pre-fill an editable path.
+#[tauri::command]
+pub async fn default_export_dir() -> Result<String, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "Could not determine your home directory".to_string())?;
+
+    for candidate in ["Downloads", "Documents"] {
+        let dir = home.join(candidate);
+        if dir.is_dir() {
+            return Ok(dir.to_string_lossy().to_string());
+        }
+    }
+    Ok(home.to_string_lossy().to_string())
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ExportReportInput {
     pub report_id: String,
-    pub export_path: String,    // User-selected path from Tauri dialog
-    pub format: String,         // "html" | "json"
+    pub export_path: String,
 }
 
 #[tauri::command]
@@ -99,27 +173,41 @@ pub async fn export_report(
     input: ExportReportInput,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let reports = state.reports.read().await;
-    let report = reports.get(&input.report_id)
-        .ok_or_else(|| format!("Report '{}' not found", input.report_id))?;
-
-    // Validate export path is within safe directories (no arbitrary fs writes)
-    let safe_extensions = [".html", ".json", ".sarif"];
-    if !safe_extensions.iter().any(|ext| input.export_path.ends_with(ext)) {
-        return Err("Export path must end with .html, .json, or .sarif".into());
-    }
-
-    let content = match input.format.as_str() {
-        "html" => report.html_content.clone(),
-        "json" => serde_json::to_string_pretty(report)
-            .map_err(|e| e.to_string())?,
-        other => return Err(format!("Unsupported export format: {}", other)),
+    let content = {
+        let reports = state.reports.read().await;
+        let report = reports
+            .get(&input.report_id)
+            .ok_or_else(|| format!("Report '{}' not found", input.report_id))?;
+        report.html_content.clone()
     };
 
-    std::fs::write(&input.export_path, content.as_bytes())
-        .map_err(|e| format!("Failed to write export file: {}", e))?;
+    let path = std::path::Path::new(&input.export_path);
+    let allowed = ["html", "htm", "json", "sarif", "md", "markdown", "txt"];
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    if !allowed.contains(&extension.as_str()) {
+        return Err(format!(
+            "Export path must end with one of: {}",
+            allowed.join(", ")
+        ));
+    }
 
-    Ok(format!("Report exported to {}", input.export_path))
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(format!(
+                "Destination folder does not exist: {}",
+                parent.display()
+            ));
+        }
+    }
+
+    std::fs::write(path, content.as_bytes())
+        .map_err(|e| format!("Failed to write '{}': {e}", path.display()))?;
+
+    Ok(format!("Report exported to {}", path.display()))
 }
 
 #[tauri::command]
@@ -128,7 +216,8 @@ pub async fn list_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<ReportRecord>, String> {
     let map = state.reports.read().await;
-    let mut records: Vec<ReportRecord> = map.values()
+    let mut records: Vec<ReportRecord> = map
+        .values()
         .filter(|r| r.scan_id == scan_id)
         .cloned()
         .collect();
@@ -136,56 +225,105 @@ pub async fn list_reports(
     Ok(records)
 }
 
-// ── Conversion helper ─────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn finding_record_to_core(f: &FindingRecord) -> Finding {
-    let severity = match f.severity.as_str() {
-        "Critical" => Severity::Critical,
-        "High"     => Severity::High,
-        "Medium"   => Severity::Medium,
-        "Low"      => Severity::Low,
-        _          => Severity::Info,
-    };
-    let status = match f.status.as_str() {
-        "Remediated"    => FindingStatus::Remediated,
-        "Accepted Risk" => FindingStatus::AcceptedRisk,
-        "False Positive"=> FindingStatus::FalsePositive,
-        _               => FindingStatus::Open,
-    };
-    Finding {
-        id: Uuid::parse_str(&f.id).unwrap_or_else(|_| Uuid::new_v4()),
-        scan_id: Uuid::parse_str(&f.scan_id).unwrap_or_else(|_| Uuid::new_v4()),
-        target_id: Uuid::parse_str(&f.target_id).unwrap_or_else(|_| Uuid::new_v4()),
-        title: f.title.clone(),
-        description: f.description.clone(),
-        severity: severity.clone(),
-        cvss4: if f.cvss4_score > 0.0 {
-            Some(CVSS4Data {
-                base_score: f.cvss4_score as f64,
-                vector_string: String::new(),
-                severity_label: format!("{:?}", severity),
-            })
-        } else { None },
-        epss: if f.epss_score > 0.0 {
-            Some(EPSSData { score: f.epss_score as f64, percentile: f.epss_score as f64 })
-        } else { None },
-        kev_listed: f.kev_listed,
-        asset_exposure_factor: 1.0,
-        reachability_score: 1.0,
-        priority_score: f.priority_score as f64,
-        cwe_id: f.cwe_id.clone(),
-        owasp_2025: f.owasp_2025.clone(),
-        wstg_id: f.wstg_id.clone(),
-        api_top10: None,
-        affected_component: f.affected_component.clone(),
-        evidences: vec![],
-        repro_steps: f.repro_steps.clone(),
-        remediation: f.remediation.clone(),
-        references: vec![],
-        status,
-        source_tools: f.source_tools.clone(),
-        ai_triage: None,
-        priority_rationale: f.priority_rationale.clone(),
-        created_at: f.created_at,
+async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>) -> ReportContext {
+    let run = state.scan_runs.read().await.get(&input.scan_id).cloned();
+
+    let target_url = input
+        .target_url
+        .clone()
+        .unwrap_or_else(|| "(not recorded)".to_string());
+
+    let mut ctx = ReportContext::new(&input.company_name, &input.target_name, &target_url);
+    ctx.logo_data_uri = input.logo_data_uri.clone();
+    if let Some(analyst) = &input.analyst {
+        if !analyst.trim().is_empty() {
+            ctx.analyst = analyst.clone();
+        }
+    }
+
+    if let Some(run) = &run {
+        ctx.assessment_start = run.started_at;
+        ctx.assessment_end = run.completed_at.unwrap_or_else(Utc::now);
+        ctx.engines_executed = run.engines_executed.clone();
+
+        // Scope and authorisation detail comes from the signed RoE, so the
+        // attestation block reflects what was actually agreed.
+        if let Some(auth) = state.auth_records.read().await.get(&run.target_id) {
+            ctx.allowed_domains = auth.scope.allowed_domains.clone();
+            ctx.out_of_scope_paths = auth.scope.out_of_scope_paths.clone();
+            ctx.rate_limit_rps = auth.scope.rate_limit_rps;
+            ctx.roe_hash = Some(auth.roe_document_hash.clone());
+        }
+    }
+
+    ctx
+}
+
+/// Coverage for a scan. Returns `None` when the scan run is unknown, so a report
+/// can never present a coverage matrix for engines that were never recorded.
+async fn build_coverage(
+    scan_id: &str,
+    findings: &[Finding],
+    state: &State<'_, AppState>,
+) -> Option<CoverageReport> {
+    let engines = state.scan_engines.read().await.get(scan_id).cloned()?;
+    Some(ChecklistEngine::assess(&engines, findings))
+}
+
+/// Reduce a company name to a filesystem-safe token.
+pub fn sanitize_filename(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let collapsed = cleaned
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_lowercase();
+    if collapsed.is_empty() {
+        "report".to_string()
+    } else {
+        collapsed.chars().take(48).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_types_cover_both_audiences_and_machine_formats() {
+        for expected in ["client", "developer", "sarif", "markdown", "json"] {
+            assert!(REPORT_TYPES.contains(&expected), "{expected} must be offered");
+        }
+    }
+
+    #[test]
+    fn filenames_are_sanitised() {
+        assert_eq!(sanitize_filename("Acme Corp"), "acme-corp");
+        assert_eq!(sanitize_filename("Acme, Inc."), "acme-inc");
+    }
+
+    #[test]
+    fn path_traversal_cannot_survive_filename_sanitisation() {
+        let out = sanitize_filename("../../etc/passwd");
+        assert!(!out.contains(".."));
+        assert!(!out.contains('/'));
+        assert_eq!(out, "etc-passwd");
+    }
+
+    #[test]
+    fn empty_or_symbolic_names_fall_back_to_a_default() {
+        assert_eq!(sanitize_filename(""), "report");
+        assert_eq!(sanitize_filename("***"), "report");
+    }
+
+    #[test]
+    fn very_long_names_are_truncated() {
+        assert!(sanitize_filename(&"a".repeat(200)).len() <= 48);
     }
 }

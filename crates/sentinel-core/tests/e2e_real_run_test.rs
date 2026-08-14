@@ -1,7 +1,7 @@
 use sentinel_core::models::target::{Target, AuthorizationRecord, ScopeDefinition};
 use sentinel_adapters::orchestrator::ScanOrchestrator;
 use sentinel_adapters::dast_config::DastConfig;
-use sentinel_core::reporting::ReportEngine;
+use sentinel_core::reporting::{ReportContext, ReportEngine};
 use sentinel_db::repository::{MemorySentinelRepository, SentinelRepository};
 use uuid::Uuid;
 use chrono::Utc;
@@ -77,10 +77,21 @@ async fn test_e2e_real_run_against_juice_shop_and_local_repo() {
     let reloaded = repo.get_findings_by_target(target_id).await.unwrap();
     assert_eq!(reloaded.len(), run_result.all_findings.len());
 
-    // 4. Generate Reports
-    let exec_report = ReportEngine::generate_client_report_html("Acme Corp", None, &target.name, &reloaded);
-    let dev_report = ReportEngine::generate_developer_report_html(&target.name, &reloaded);
+    // 4. Generate Reports, driven by the engines that genuinely executed
+    let mut ctx = ReportContext::new("Acme Corp", &target.name, &target.base_url);
+    ctx.engines_executed = run_result.engines_executed.clone();
+    let coverage = run_result.coverage();
+    let exec_report = ReportEngine::client_report(&ctx, &reloaded, Some(&coverage));
+    let dev_report = ReportEngine::developer_report(&ctx, &reloaded, Some(&coverage));
     let sarif_report = ReportEngine::generate_sarif_json(&reloaded);
+
+    // Coverage must never claim more than the engines that actually ran
+    for engine in &coverage.engines_executed {
+        assert!(
+            run_result.engines_executed.contains(engine),
+            "coverage claims engine '{engine}' that did not execute"
+        );
+    }
 
     // 5. Verify Security Assertions
     assert!(!exec_report.contains("AKIAIOSFODNN7EXAMPLE"), "Zero secret leak in Executive report");

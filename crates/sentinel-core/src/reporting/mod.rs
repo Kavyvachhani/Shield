@@ -1,302 +1,618 @@
-use crate::models::finding::{Finding, Severity};
-use crate::scoring::priority::PriorityScoringEngine;
-use serde_json::json;
+//! Report generation.
+//!
+//! Two audiences, two documents, one dataset:
+//!
+//!   • **Client / executive report** — what was assessed, how healthy the
+//!     application is, what it means commercially, and what to do next. Leads
+//!     with the full coverage matrix so the client can see every check that was
+//!     performed, including the ones that passed.
+//!
+//!   • **Developer / technical report** — one section per finding with the exact
+//!     location, reproduction steps, sanitized evidence, a concrete fix and
+//!     verification steps.
+//!
+//! Both are self-contained HTML with inline styles and inline SVG: no scripts,
+//! no external fonts, no network requests. They render identically offline and
+//! print to clean PDF via the browser's "Save as PDF".
 
+pub mod charts;
+pub mod client;
+pub mod developer;
+pub mod escape;
+
+use crate::checklist::CoverageReport;
+use crate::models::finding::{Finding, Severity};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// Everything the reports need about the engagement itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportContext {
+    pub company_name: String,
+    pub target_name: String,
+    pub target_url: String,
+    /// Optional base64 `data:image/...` logo. Anything else is ignored.
+    pub logo_data_uri: Option<String>,
+    pub analyst: String,
+    pub assessment_start: DateTime<Utc>,
+    pub assessment_end: DateTime<Utc>,
+    /// Engines that genuinely executed.
+    pub engines_executed: Vec<String>,
+    pub allowed_domains: Vec<String>,
+    pub out_of_scope_paths: Vec<String>,
+    pub rate_limit_rps: u32,
+    /// SHA-256 of the signed Rules of Engagement, for the attestation block.
+    pub roe_hash: Option<String>,
+    pub report_reference: String,
+}
+
+impl ReportContext {
+    /// A context with sensible defaults, for tests and for callers that only
+    /// have partial engagement metadata.
+    pub fn new(company_name: &str, target_name: &str, target_url: &str) -> Self {
+        let now = Utc::now();
+        Self {
+            company_name: company_name.to_string(),
+            target_name: target_name.to_string(),
+            target_url: target_url.to_string(),
+            logo_data_uri: None,
+            analyst: "SentinelVAPT".to_string(),
+            assessment_start: now,
+            assessment_end: now,
+            engines_executed: Vec::new(),
+            allowed_domains: Vec::new(),
+            out_of_scope_paths: Vec::new(),
+            rate_limit_rps: 5,
+            roe_hash: None,
+            report_reference: format!("SV-{}", now.format("%Y%m%d-%H%M")),
+        }
+    }
+}
+
+/// Severity tallies used across both reports.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct SeverityCounts {
+    pub critical: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub info: usize,
+}
+
+impl SeverityCounts {
+    pub fn of(findings: &[Finding]) -> Self {
+        let mut c = Self::default();
+        for f in findings {
+            match f.severity {
+                Severity::Critical => c.critical += 1,
+                Severity::High => c.high += 1,
+                Severity::Medium => c.medium += 1,
+                Severity::Low => c.low += 1,
+                Severity::Info => c.info += 1,
+            }
+        }
+        c
+    }
+
+    pub fn total(&self) -> usize {
+        self.critical + self.high + self.medium + self.low + self.info
+    }
+
+    /// Findings that require action, i.e. everything above informational.
+    pub fn actionable(&self) -> usize {
+        self.critical + self.high + self.medium + self.low
+    }
+}
+
+/// Overall posture band derived from the findings and coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PostureBand {
+    Strong,
+    Adequate,
+    NeedsImprovement,
+    AtRisk,
+    Critical,
+}
+
+impl PostureBand {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PostureBand::Strong => "Strong",
+            PostureBand::Adequate => "Adequate",
+            PostureBand::NeedsImprovement => "Needs Improvement",
+            PostureBand::AtRisk => "At Risk",
+            PostureBand::Critical => "Critical",
+        }
+    }
+
+    pub fn color(&self) -> &'static str {
+        match self {
+            PostureBand::Strong => "#16a34a",
+            PostureBand::Adequate => "#0284c7",
+            PostureBand::NeedsImprovement => "#ca8a04",
+            PostureBand::AtRisk => "#ea580c",
+            PostureBand::Critical => "#b91c1c",
+        }
+    }
+
+    /// The one-paragraph verdict shown at the top of the client report.
+    pub fn verdict(&self) -> &'static str {
+        match self {
+            PostureBand::Strong =>
+                "The assessment found no high-impact weaknesses. The controls that were tested behaved as expected, and the issues raised are refinements rather than exposures. Maintain the current standard and re-test after significant changes.",
+            PostureBand::Adequate =>
+                "The application's core protections are in place. A number of lower-impact weaknesses were identified that should be scheduled into normal development work; none of them require emergency action.",
+            PostureBand::NeedsImprovement =>
+                "Several weaknesses were identified that a motivated attacker could combine to meaningful effect. None represents an immediate breach, but the pattern suggests security review is not consistently applied. Address the medium and high items over the coming weeks.",
+            PostureBand::AtRisk =>
+                "High-impact weaknesses were confirmed on the live application. These are directly exploitable by an external attacker without credentials, and should be treated as an active risk to customer data and service availability. Remediation should begin within days, not weeks.",
+            PostureBand::Critical =>
+                "Critical weaknesses were confirmed that expose sensitive data or grant unauthorised control of the application. These require immediate action: an attacker who finds them needs no special access and no unusual skill. Treat this as an incident-grade priority and remediate before the next release.",
+        }
+    }
+}
+
+/// A 0–100 posture score plus its band.
+///
+/// The score starts at 100 and deducts per finding weighted by severity, then
+/// applies a penalty proportional to how much of the checklist could not be
+/// exercised — a scan that tested very little must not score as "Strong".
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PostureScore {
+    pub score: f64,
+    pub band: PostureBand,
+}
+
+impl PostureScore {
+    pub fn compute(counts: &SeverityCounts, coverage: Option<&CoverageReport>) -> Self {
+        let deductions = (counts.critical as f64 * 22.0)
+            + (counts.high as f64 * 12.0)
+            + (counts.medium as f64 * 5.0)
+            + (counts.low as f64 * 1.5);
+
+        let mut score = (100.0 - deductions).max(0.0);
+
+        // An assessment that exercised little of the catalog cannot claim a high
+        // score: the absence of findings would reflect absent testing, not health.
+        if let Some(cov) = coverage {
+            let confidence = (cov.automated_coverage_pct / 100.0).clamp(0.0, 1.0);
+            score *= 0.55 + (0.45 * confidence);
+        }
+
+        let score = (score * 10.0).round() / 10.0;
+
+        // Severity floors: a confirmed critical can never present as healthy,
+        // regardless of how few other findings there are.
+        let band = if counts.critical > 0 {
+            PostureBand::Critical
+        } else if counts.high > 0 && score < 70.0 {
+            PostureBand::AtRisk
+        } else if counts.high > 0 {
+            PostureBand::NeedsImprovement
+        } else if score >= 85.0 {
+            PostureBand::Strong
+        } else if score >= 70.0 {
+            PostureBand::Adequate
+        } else if score >= 50.0 {
+            PostureBand::NeedsImprovement
+        } else {
+            PostureBand::AtRisk
+        };
+
+        Self { score, band }
+    }
+}
+
+/// Remediation urgency band shown in the roadmap.
+pub fn remediation_window(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "Immediate — within 24–48 hours",
+        Severity::High => "Urgent — within 7 days",
+        Severity::Medium => "Planned — within 30 days",
+        Severity::Low => "Scheduled — within 90 days",
+        Severity::Info => "Optional — at the team's discretion",
+    }
+}
+
+/// Sort findings highest-risk first, with deterministic tie-breaking.
+pub fn sort_by_priority(findings: &[Finding]) -> Vec<Finding> {
+    let mut sorted = findings.to_vec();
+    sorted.sort_by(|a, b| {
+        b.priority_score
+            .partial_cmp(&a.priority_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.severity.cmp(&b.severity))
+            .then(a.title.cmp(&b.title))
+            .then(a.affected_component.cmp(&b.affected_component))
+            .then(a.id.cmp(&b.id))
+    });
+    sorted
+}
+
+/// Shared print-ready stylesheet for both reports.
+pub fn base_stylesheet() -> &'static str {
+    r##"
+:root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#ffffff;--soft:#f8fafc;--brand:#0f4c81}
+*{box-sizing:border-box}
+body{margin:0;background:var(--soft);color:var(--ink);
+  font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
+  font-size:14px;line-height:1.6;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{max-width:1000px;margin:0 auto;padding:36px 44px;background:var(--bg)}
+h1,h2,h3,h4{margin:0;line-height:1.25}
+h2{font-size:20px;margin:38px 0 14px;padding-bottom:9px;border-bottom:2px solid var(--line)}
+h3{font-size:16px;margin:22px 0 8px}
+p{margin:0 0 12px}
+a{color:var(--brand)}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600;color:#334155}
+tbody tr:nth-child(even){background:#fcfdfe}
+code,pre{font-family:'Cascadia Mono',Consolas,'SF Mono',Menlo,monospace;font-size:12px}
+pre{background:#0f172a;color:#e2e8f0;padding:13px 15px;border-radius:7px;overflow-x:auto;
+  white-space:pre-wrap;word-break:break-word;margin:8px 0}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11px;
+  font-weight:700;letter-spacing:.3px;color:#fff;white-space:nowrap}
+.card{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:14px}
+.grid{display:grid;gap:14px}
+.grid-4{grid-template-columns:repeat(4,1fr)}
+.grid-2{grid-template-columns:1fr 1fr}
+.kpi{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:15px;text-align:center}
+.kpi .n{font-size:29px;font-weight:700;line-height:1.15}
+.kpi .l{font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);margin-top:3px}
+.banner{border-radius:8px;padding:11px 16px;font-size:11px;font-weight:700;
+  letter-spacing:1.1px;text-transform:uppercase;text-align:center;color:#fff;background:#b91c1c}
+.callout{border-left:4px solid var(--brand);background:#f0f7ff;padding:13px 16px;border-radius:0 7px 7px 0;margin:12px 0}
+.fix{border-left:4px solid #16a34a;background:#f0fdf4;padding:13px 16px;border-radius:0 7px 7px 0;margin:12px 0}
+.warn{border-left:4px solid #ca8a04;background:#fefce8;padding:13px 16px;border-radius:0 7px 7px 0;margin:12px 0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;margin-top:10px}
+.legend span{display:flex;align-items:center;gap:6px}
+.swatch{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+.footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);
+  font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:16px}
+@media print{
+  body{background:#fff}
+  .page{max-width:none;padding:0 12mm}
+  h2{page-break-after:avoid}
+  .card,.finding,table,pre{page-break-inside:avoid}
+  .page-break{page-break-before:always}
+  @page{size:A4;margin:14mm 0}
+}
+@media (max-width:760px){
+  .page{padding:20px 16px}
+  .grid-4,.grid-2{grid-template-columns:1fr 1fr}
+}
+"##
+}
+
+/// Standard document footer.
+pub fn footer_html(ctx: &ReportContext, document_name: &str) -> String {
+    format!(
+        r##"<div class="footer">
+  <div>{doc} · {company} · Reference {reference}</div>
+  <div>Generated {generated} UTC by SentinelVAPT</div>
+</div>"##,
+        doc = escape::html(document_name),
+        company = escape::html(&ctx.company_name),
+        reference = escape::html(&ctx.report_reference),
+        generated = ctx.assessment_end.format("%Y-%m-%d %H:%M"),
+    )
+}
+
+/// Facade retained for callers that already depend on `ReportEngine`.
 pub struct ReportEngine;
 
 impl ReportEngine {
-    /// Helper to sort findings by priority score descending before rendering
-    fn sort_findings(findings: &[Finding]) -> Vec<Finding> {
-        let mut sorted = findings.to_vec();
-        sorted.sort_by(|a, b| {
-            b.priority_score.partial_cmp(&a.priority_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.severity.cmp(&b.severity))
-                .then(b.created_at.cmp(&a.created_at))
-        });
-        sorted
-    }
-
-    /// Generates Report A (Executive / Client Report) HTML: <=4 pages, business language,
-    /// severity heatmap, posture verdict, compliance snapshot, NO raw CVSS vectors, NO stack traces.
-    /// Leads with Top N findings sorted by Priority Score, accompanied by plain-language rationale.
-    pub fn generate_client_report_html(
-        company_name: &str,
-        logo_path: Option<&str>,
-        target_name: &str,
-        findings: &[Finding]
+    /// Client-facing executive report.
+    pub fn client_report(
+        ctx: &ReportContext,
+        findings: &[Finding],
+        coverage: Option<&CoverageReport>,
     ) -> String {
-        let sorted = Self::sort_findings(findings);
-        let total = sorted.len();
-        let critical = sorted.iter().filter(|f| f.severity == Severity::Critical).count();
-        let high = sorted.iter().filter(|f| f.severity == Severity::High).count();
-        let medium = sorted.iter().filter(|f| f.severity == Severity::Medium).count();
-        let _low = sorted.iter().filter(|f| f.severity == Severity::Low).count();
-
-        let logo_html = logo_path
-            .map(|p| format!(r#"<img src="{}" alt="Company Logo" style="height: 40px; margin-bottom: 10px;" />"#, p))
-            .unwrap_or_default();
-
-        let top_findings_html: String = sorted.iter().take(5).enumerate().map(|(idx, f)| {
-            let exec_rationale = PriorityScoringEngine::explain_executive(f);
-            format!(
-                r#"<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
-                    <div style="display: flex; justify-space-between; align-items: center; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; margin-bottom: 10px;">
-                        <div style="font-weight: bold; color: #0f172a; font-size: 15px;">#{rank} • {title}</div>
-                        <div style="background: #0284c7; color: white; font-weight: bold; font-size: 12px; padding: 3px 10px; border-radius: 99px;">Priority {score:.1}/10</div>
-                    </div>
-                    <div style="font-size: 13px; color: #334155; margin-bottom: 8px;"><strong>Risk Rationale:</strong> {rationale}</div>
-                    <div style="font-size: 13px; color: #475569; margin-top: 4px;"><strong>Impact Summary:</strong> {desc}</div>
-                    <div style="font-size: 12px; color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 8px 12px; border-radius: 6px; margin-top: 10px;"><strong>Strategic Action:</strong> {remediation}</div>
-                </div>"#,
-                rank = idx + 1,
-                title = f.title,
-                score = f.priority_score,
-                rationale = exec_rationale,
-                desc = f.description,
-                remediation = f.remediation
-            )
-        }).collect();
-
-        format!(
-            r#"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Executive Security Posture Report — {company_name}</title>
-    <style>
-        body {{ font-family: 'Helvetica Neue', Arial, sans-serif; margin: 40px; color: #1e293b; background: #f8fafc; line-height: 1.6; }}
-        .confidential-header {{ background: #dc2626; color: white; text-align: center; font-weight: bold; font-size: 11px; letter-spacing: 1px; padding: 6px; border-radius: 4px; margin-bottom: 20px; }}
-        .header {{ border-bottom: 3px solid #0284c7; padding-bottom: 20px; margin-bottom: 30px; }}
-        .title {{ font-size: 26px; font-weight: bold; color: #0f172a; }}
-        .subtitle {{ font-size: 14px; color: #64748b; margin-top: 5px; }}
-        .verdict {{ background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 16px; border-radius: 8px; font-weight: 500; margin: 20px 0; }}
-        .metrics-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 25px 0; }}
-        .metric-card {{ background: white; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; text-align: center; }}
-        .metric-value {{ font-size: 32px; font-weight: bold; margin-top: 5px; }}
-        .section-title {{ font-size: 18px; font-weight: bold; color: #0f172a; margin-top: 30px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }}
-        .compliance-table {{ width: 100%; border-collapse: collapse; margin-top: 15px; background: white; border-radius: 8px; overflow: hidden; }}
-        .compliance-table th, .compliance-table td {{ border: 1px solid #e2e8f0; padding: 10px 15px; text-align: left; font-size: 13px; }}
-        .compliance-table th {{ background: #f1f5f9; font-weight: bold; color: #334155; }}
-    </style>
-</head>
-<body>
-    <div class="confidential-header">STRICTLY CONFIDENTIAL — FOR AUTHORIZED CLIENT REVIEW ONLY</div>
-
-    <div class="header">
-        {logo_html}
-        <div class="title">Executive Security Posture & Vulnerability Report</div>
-        <div class="subtitle">Client: <strong>{company_name}</strong> | Target Application: <strong>{target_name}</strong></div>
-    </div>
-
-    <div class="verdict">
-        ✓ <strong>Security Posture Verdict:</strong> Comprehensive offline multi-engine assessment completed under signed Rules of Engagement (RoE). Findings are prioritized by SentinelVAPT Integrated Priority Score (CVSS4 × EPSS × KEV × Reachability × Exposure).
-    </div>
-
-    <div class="section-title">Risk Severity Breakdown & Heatmap</div>
-    <div class="metrics-grid">
-        <div class="metric-card"><div style="color: #64748b; font-size: 11px;">TOTAL FINDINGS</div><div class="metric-value">{total}</div></div>
-        <div class="metric-card"><div style="color: #ef4444; font-size: 11px;">CRITICAL</div><div class="metric-value" style="color: #ef4444;">{critical}</div></div>
-        <div class="metric-card"><div style="color: #f97316; font-size: 11px;">HIGH</div><div class="metric-value" style="color: #f97316;">{high}</div></div>
-        <div class="metric-card"><div style="color: #eab308; font-size: 11px;">MEDIUM</div><div class="metric-value" style="color: #eab308;">{medium}</div></div>
-    </div>
-
-    <div class="section-title">Strategic Business Risk Priorities (Top {top_count} by Priority Score)</div>
-    {top_findings_html}
-
-    <div class="section-title">Compliance Framework Alignment Snapshot</div>
-    <table class="compliance-table">
-        <thead>
-            <tr>
-                <th>Compliance Framework</th>
-                <th>Relevant Control Area</th>
-                <th>Current Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td><strong>PCI DSS v4.0.1</strong></td>
-                <td>Requirement 6.3 (Software Security & Patching)</td>
-                <td><span style="color: #ea580c; font-weight: bold;">Attention Required ({critical} Critical / {high} High)</span></td>
-            </tr>
-            <tr>
-                <td><strong>SOC 2 Type II</strong></td>
-                <td>CC7.1 (Vulnerability Management & Monitoring)</td>
-                <td><span style="color: #16a34a; font-weight: bold;">Evidence Logged in Audit Ledger</span></td>
-            </tr>
-            <tr>
-                <td><strong>ISO/IEC 27001:2022</strong></td>
-                <td>Control A.8.8 (Management of Technical Vulnerabilities)</td>
-                <td><span style="color: #16a34a; font-weight: bold;">Assessment Conducted</span></td>
-            </tr>
-        </tbody>
-    </table>
-</body>
-</html>"#,
-            company_name = company_name,
-            target_name = target_name,
-            logo_html = logo_html,
-            total = total,
-            critical = critical,
-            high = high,
-            medium = medium,
-            top_count = sorted.len().min(5),
-            top_findings_html = top_findings_html
-        )
+        client::render(ctx, findings, coverage)
     }
 
-    /// Generates Report B (Developer / Technical Report) HTML: per-finding blocks with title,
-    /// priority rationale breakdown, CVSS4 vector, CWE + OWASP Top 10:2025 + WSTG ID, affected component,
-    /// reproduction steps, sanitized evidence, precise remediation, and references.
-    pub fn generate_developer_report_html(target_name: &str, findings: &[Finding]) -> String {
-        let sorted = Self::sort_findings(findings);
-
-        let findings_html: String = sorted.iter().enumerate().map(|(idx, f)| {
-            let cwe = f.cwe_id.as_deref().unwrap_or("N/A");
-            let owasp = f.owasp_2025.as_deref().unwrap_or("N/A");
-            let wstg = f.wstg_id.as_deref().unwrap_or("N/A");
-            let cvss_vec = f.cvss4.as_ref().map(|c| c.vector_string.as_str()).unwrap_or("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H");
-
-            let rationale = if !f.priority_rationale.is_empty() {
-                f.priority_rationale.clone()
-            } else {
-                PriorityScoringEngine::explain(f)
-            };
-
-            let repro_html: String = f.repro_steps.iter().map(|step| format!("<li><code>{}</code></li>", step)).collect();
-            let evidences_html: String = f.evidences.iter().map(|ev| {
-                format!(
-                    r#"<div style="background: #0f172a; color: #f8fafc; font-family: monospace; font-size: 11px; padding: 12px; border-radius: 6px; margin-top: 6px;">
-                        <div style="color: #38bdf8; font-weight: bold; margin-bottom: 4px;">[{}] {}</div>
-                        <pre style="margin: 0; white-space: pre-wrap;">{}</pre>
-                    </div>"#,
-                    ev.evidence_type, ev.title, ev.content
-                )
-            }).collect();
-
-            format!(
-                r#"<div style="background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 22px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                    <div style="display: flex; justify-content: space-between; align-items: start; border-bottom: 1px solid #e2e8f0; padding-bottom: 14px;">
-                        <div>
-                            <span style="font-family: monospace; font-size: 12px; color: #0284c7; font-weight: bold;">#{rank} • {cwe} • {owasp} • {wstg}</span>
-                            <h3 style="margin: 6px 0 0 0; font-size: 19px; color: #0f172a;">{title}</h3>
-                            <div style="font-family: monospace; font-size: 12px; color: #64748b; margin-top: 4px;">Component / Endpoint: {affected}</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="font-size: 10px; color: #64748b;">PRIORITY SCORE</div>
-                            <div style="font-size: 26px; font-weight: bold; color: #0284c7;">{score:.1}</div>
-                        </div>
-                    </div>
-
-                    <div style="margin-top: 12px; font-size: 12px; color: #0369a1; background: #e0f2fe; border: 1px solid #bae6fd; padding: 8px 12px; border-radius: 6px; font-weight: 500;">
-                        💡 <strong>Why this ranks here:</strong> {rationale}
-                    </div>
-
-                    <div style="margin-top: 10px; font-family: monospace; font-size: 11px; color: #475569; background: #f1f5f9; padding: 6px 10px; border-radius: 4px;">
-                        Vector: {cvss_vec}
-                    </div>
-                    
-                    <div style="margin-top: 16px;">
-                        <h4 style="font-size: 12px; text-transform: uppercase; color: #475569; margin: 0 0 4px 0;">Technical Description</h4>
-                        <p style="font-size: 13px; color: #334155; margin: 0; line-height: 1.5;">{desc}</p>
-                    </div>
-
-                    <div style="margin-top: 16px;">
-                        <h4 style="font-size: 12px; text-transform: uppercase; color: #475569; margin: 0 0 6px 0;">Reproduction Steps</h4>
-                        <ol style="font-size: 13px; color: #334155; margin: 0; padding-left: 20px;">{repro}</ol>
-                    </div>
-
-                    <div style="margin-top: 16px;">
-                        <h4 style="font-size: 12px; text-transform: uppercase; color: #475569; margin: 0 0 6px 0;">Sanitized Proof Evidence Payload</h4>
-                        {evidences}
-                    </div>
-
-                    <div style="margin-top: 16px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px; border-radius: 6px;">
-                        <h4 style="font-size: 12px; text-transform: uppercase; color: #166534; margin: 0 0 4px 0;">Precise Remediation Guidance</h4>
-                        <div style="font-size: 13px; color: #15803d; font-weight: 500;">{remediation}</div>
-                    </div>
-                </div>"#,
-                rank = idx + 1,
-                cwe = cwe,
-                owasp = owasp,
-                wstg = wstg,
-                title = f.title,
-                affected = f.affected_component,
-                score = f.priority_score,
-                rationale = rationale,
-                cvss_vec = cvss_vec,
-                desc = f.description,
-                repro = repro_html,
-                evidences = evidences_html,
-                remediation = f.remediation
-            )
-        }).collect();
-
-        format!(
-            r#"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Developer Technical VAPT Report — {target_name}</title>
-    <style>
-        body {{ font-family: 'Helvetica Neue', Arial, sans-serif; margin: 40px; color: #1e293b; background: #f8fafc; line-height: 1.5; }}
-        .header {{ border-bottom: 3px solid #0f172a; padding-bottom: 20px; margin-bottom: 30px; }}
-        .title {{ font-size: 26px; font-weight: bold; color: #0f172a; }}
-        .subtitle {{ font-size: 14px; color: #64748b; margin-top: 5px; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="title">Developer Technical Remediation Guide</div>
-        <div class="subtitle">Target Application: <strong>{target_name}</strong> | SentinelVAPT Multi-Engine Audit (Sorted by Integrated Priority Score)</div>
-    </div>
-    {findings_html}
-</body>
-</html>"#
-        )
+    /// Developer-facing technical remediation report.
+    pub fn developer_report(
+        ctx: &ReportContext,
+        findings: &[Finding],
+        coverage: Option<&CoverageReport>,
+    ) -> String {
+        developer::render(ctx, findings, coverage)
     }
 
-    /// Generates machine-readable SARIF 2.1.0 JSON format for developer pipelines
+    /// SARIF 2.1.0 for CI pipelines and code-scanning dashboards.
     pub fn generate_sarif_json(findings: &[Finding]) -> String {
-        let sorted = Self::sort_findings(findings);
+        let sorted = sort_by_priority(findings);
 
-        let rules: Vec<serde_json::Value> = sorted.iter().map(|f| {
-            json!({
-                "id": f.cwe_id.as_deref().unwrap_or("VAPT-GENERIC"),
+        // SARIF requires unique rule ids; collapse findings onto their check class.
+        let mut rules: Vec<serde_json::Value> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for f in &sorted {
+            let rule_id = sarif_rule_id(f);
+            if seen.contains(&rule_id) {
+                continue;
+            }
+            seen.push(rule_id.clone());
+            rules.push(serde_json::json!({
+                "id": rule_id,
                 "name": f.title,
                 "shortDescription": { "text": f.title },
                 "fullDescription": { "text": f.description },
-                "help": { "text": format!("{}\n\nRemediation: {}", f.priority_rationale, f.remediation) }
-            })
-        }).collect();
+                "help": { "text": format!("Remediation: {}", f.remediation) },
+                "properties": {
+                    "tags": sarif_tags(f),
+                    "security-severity": format!("{:.1}", f.cvss4.as_ref().map(|c| c.base_score).unwrap_or(0.0)),
+                }
+            }));
+        }
 
-        let results: Vec<serde_json::Value> = sorted.iter().map(|f| {
-            json!({
-                "ruleId": f.cwe_id.as_deref().unwrap_or("VAPT-GENERIC"),
-                "message": { "text": format!("[Priority {:.1}] {}", f.priority_score, f.title) },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": f.affected_component }
+        let results: Vec<serde_json::Value> = sorted
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "ruleId": sarif_rule_id(f),
+                    "level": sarif_level(&f.severity),
+                    "message": { "text": format!("[Priority {:.1}] {}", f.priority_score, f.title) },
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": { "uri": f.affected_component }
+                        }
+                    }],
+                    "properties": {
+                        "priorityScore": f.priority_score,
+                        "severity": format!("{:?}", f.severity),
+                        "sourceTools": f.source_tools,
                     }
-                }]
+                })
             })
-        }).collect();
+            .collect();
 
-        let sarif = json!({
+        let sarif = serde_json::json!({
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": "2.1.0",
             "runs": [{
-                "tool": {
-                    "driver": {
-                        "name": "SentinelVAPT",
-                        "version": "0.1.0",
-                        "rules": rules
-                    }
-                },
+                "tool": { "driver": {
+                    "name": "SentinelVAPT",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": "https://github.com/sentinelvapt",
+                    "rules": rules
+                }},
                 "results": results
             }]
         });
 
-        serde_json::to_string_pretty(&sarif).unwrap_or_default()
+        serde_json::to_string_pretty(&sarif).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Ticket-ready Markdown, one section per finding.
+    pub fn developer_markdown(ctx: &ReportContext, findings: &[Finding]) -> String {
+        developer::render_markdown(ctx, findings)
+    }
+
+    /// Machine-readable export of the whole assessment.
+    pub fn generate_json(
+        ctx: &ReportContext,
+        findings: &[Finding],
+        coverage: Option<&CoverageReport>,
+    ) -> String {
+        let counts = SeverityCounts::of(findings);
+        let posture = PostureScore::compute(&counts, coverage);
+        let payload = serde_json::json!({
+            "schemaVersion": "1.0",
+            "generator": { "name": "SentinelVAPT", "version": env!("CARGO_PKG_VERSION") },
+            "engagement": ctx,
+            "summary": {
+                "severityCounts": counts,
+                "postureScore": posture.score,
+                "postureBand": posture.band.label(),
+                "totalFindings": findings.len(),
+            },
+            "coverage": coverage,
+            "findings": sort_by_priority(findings),
+        });
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+fn sarif_rule_id(f: &Finding) -> String {
+    f.cwe_id
+        .as_deref()
+        .filter(|c| !c.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "SENTINEL-GENERIC".to_string())
+}
+
+fn sarif_tags(f: &Finding) -> Vec<String> {
+    let mut tags = vec!["security".to_string()];
+    for value in [&f.cwe_id, &f.owasp_2025, &f.wstg_id, &f.api_top10] {
+        if let Some(v) = value {
+            if !v.trim().is_empty() {
+                tags.push(v.clone());
+            }
+        }
+    }
+    tags
+}
+
+fn sarif_level(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical | Severity::High => "error",
+        Severity::Medium | Severity::Low => "warning",
+        Severity::Info => "note",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::finding::{CVSS4Data, FindingStatus};
+    use uuid::Uuid;
+
+    pub(crate) fn finding(title: &str, sev: Severity, score: f64) -> Finding {
+        Finding {
+            id: Uuid::new_v4(),
+            scan_id: Uuid::new_v4(),
+            target_id: Uuid::new_v4(),
+            title: title.into(),
+            description: "Description text.".into(),
+            severity: sev.clone(),
+            cvss4: Some(CVSS4Data {
+                vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H".into(),
+                base_score: score,
+                severity_label: format!("{sev:?}"),
+            }),
+            epss: None,
+            kev_listed: false,
+            asset_exposure_factor: 1.0,
+            reachability_score: 1.0,
+            priority_score: score,
+            cwe_id: Some("CWE-79".into()),
+            owasp_2025: Some("A05:2025-Injection".into()),
+            wstg_id: Some("WSTG-INPV-01".into()),
+            api_top10: None,
+            affected_component: "https://app.test/x".into(),
+            evidences: vec![],
+            repro_steps: vec!["step one".into()],
+            remediation: "Fix it properly.".into(),
+            references: vec!["https://owasp.org/x".into()],
+            status: FindingStatus::Open,
+            source_tools: vec!["Sentinel Native".into()],
+            ai_triage: None,
+            priority_rationale: "because".into(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn severity_counts_tally_correctly() {
+        let f = vec![
+            finding("a", Severity::Critical, 9.0),
+            finding("b", Severity::High, 8.0),
+            finding("c", Severity::High, 7.5),
+            finding("d", Severity::Info, 0.0),
+        ];
+        let c = SeverityCounts::of(&f);
+        assert_eq!(c.critical, 1);
+        assert_eq!(c.high, 2);
+        assert_eq!(c.total(), 4);
+        assert_eq!(c.actionable(), 3, "informational findings are not actionable");
+    }
+
+    #[test]
+    fn a_clean_fully_covered_assessment_scores_strong() {
+        let coverage = crate::checklist::ChecklistEngine::assess(
+            &["Sentinel Native".into(), "OWASP ZAP".into(), "Nuclei".into(),
+              "Semgrep".into(), "Trivy".into(), "Gitleaks".into()],
+            &[],
+        );
+        let p = PostureScore::compute(&SeverityCounts::default(), Some(&coverage));
+        assert_eq!(p.band, PostureBand::Strong);
+        assert_eq!(p.score, 100.0);
+    }
+
+    #[test]
+    fn a_clean_but_barely_covered_assessment_does_not_score_strong() {
+        // No engines ran, so nothing was actually tested.
+        let coverage = crate::checklist::ChecklistEngine::assess(&[], &[]);
+        let p = PostureScore::compute(&SeverityCounts::default(), Some(&coverage));
+        assert!(
+            p.band != PostureBand::Strong,
+            "an untested application must not be reported as strong (got {:?} at {})",
+            p.band, p.score
+        );
+    }
+
+    #[test]
+    fn any_critical_finding_forces_the_critical_band() {
+        let counts = SeverityCounts { critical: 1, ..Default::default() };
+        assert_eq!(PostureScore::compute(&counts, None).band, PostureBand::Critical);
+    }
+
+    #[test]
+    fn posture_score_never_goes_negative() {
+        let counts = SeverityCounts { critical: 40, high: 40, medium: 40, low: 40, info: 0 };
+        let p = PostureScore::compute(&counts, None);
+        assert!(p.score >= 0.0, "score went negative: {}", p.score);
+    }
+
+    #[test]
+    fn more_findings_never_increase_the_score() {
+        let few = SeverityCounts { medium: 1, ..Default::default() };
+        let many = SeverityCounts { medium: 6, ..Default::default() };
+        assert!(PostureScore::compute(&many, None).score < PostureScore::compute(&few, None).score);
+    }
+
+    #[test]
+    fn every_posture_band_has_a_verdict_and_colour() {
+        for band in [PostureBand::Strong, PostureBand::Adequate, PostureBand::NeedsImprovement,
+                     PostureBand::AtRisk, PostureBand::Critical] {
+            assert!(!band.verdict().is_empty());
+            assert!(band.color().starts_with('#'));
+            assert!(!band.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn sorting_is_deterministic_for_equal_scores() {
+        let a = finding("aaa", Severity::High, 7.0);
+        let b = finding("bbb", Severity::High, 7.0);
+        let one = sort_by_priority(&[a.clone(), b.clone()]);
+        let two = sort_by_priority(&[b, a]);
+        assert_eq!(
+            one.iter().map(|f| f.title.clone()).collect::<Vec<_>>(),
+            two.iter().map(|f| f.title.clone()).collect::<Vec<_>>(),
+            "sort order must not depend on input order"
+        );
+    }
+
+    #[test]
+    fn sorting_puts_the_highest_priority_first() {
+        let sorted = sort_by_priority(&[
+            finding("low", Severity::Low, 3.0),
+            finding("crit", Severity::Critical, 9.8),
+            finding("med", Severity::Medium, 5.5),
+        ]);
+        assert_eq!(sorted[0].title, "crit");
+        assert_eq!(sorted[2].title, "low");
+    }
+
+    #[test]
+    fn sarif_output_is_valid_json_with_unique_rules() {
+        let findings = vec![
+            finding("XSS one", Severity::High, 8.0),
+            finding("XSS two", Severity::High, 7.0), // same CWE
+        ];
+        let sarif = ReportEngine::generate_sarif_json(&findings);
+        let parsed: serde_json::Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(parsed["version"], "2.1.0");
+        let rules = parsed["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 1, "findings sharing a CWE collapse to one SARIF rule");
+        assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sarif_levels_map_severity_correctly() {
+        assert_eq!(sarif_level(&Severity::Critical), "error");
+        assert_eq!(sarif_level(&Severity::Medium), "warning");
+        assert_eq!(sarif_level(&Severity::Info), "note");
+    }
+
+    #[test]
+    fn json_export_round_trips() {
+        let ctx = ReportContext::new("Acme", "Portal", "https://app.test");
+        let json = ReportEngine::generate_json(&ctx, &[finding("x", Severity::High, 8.0)], None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["engagement"]["company_name"], "Acme");
+        assert_eq!(parsed["summary"]["totalFindings"], 1);
+        assert!(parsed["findings"].as_array().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn remediation_windows_are_ordered_by_urgency() {
+        assert!(remediation_window(&Severity::Critical).contains("Immediate"));
+        assert!(remediation_window(&Severity::High).contains("7 days"));
+        assert!(remediation_window(&Severity::Low).contains("90 days"));
     }
 }

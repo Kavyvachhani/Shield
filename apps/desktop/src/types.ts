@@ -55,15 +55,20 @@ export interface Finding {
   description: string;
   severity: Severity;
   cvss4Score: number;
+  cvss4Vector?: string;
   epssScore: number;
   kevListed: boolean;
   priorityScore: number;
   cweId?: string;
   owasp2025?: string;
   wstgId?: string;
+  apiTop10?: string;
   affectedComponent: string;
   reproSteps: string[];
   remediation: string;
+  references: string[];
+  evidenceCount: number;
+  falsePositiveConfidence: number;
   status: FindingStatus;
   sourceTools: string[];
   triageNote?: string;
@@ -71,8 +76,66 @@ export interface Finding {
   createdAt: string;
 }
 
+export interface Evidence {
+  evidenceType: string;
+  title: string;
+  content: string;
+  hash: string;
+}
+
+export interface FindingDetail {
+  record: Finding;
+  evidences: Evidence[];
+}
+
+// ── Checklist coverage ────────────────────────────────────────────────────────
+
+export type CheckStatus = 'issues_found' | 'passed' | 'not_tested' | 'manual_required';
+export type CoverageKind = 'automated' | 'partial' | 'manual';
+
+export interface CheckResult {
+  id: string;
+  categoryCode: string;
+  category: string;
+  name: string;
+  clientSummary: string;
+  coverage: CoverageKind;
+  coverageLabel: string;
+  status: CheckStatus;
+  statusLabel: string;
+  enginesExecuted: string[];
+  enginesMissing: string[];
+  owasp2025: string;
+  cwe: string;
+  findingCount: number;
+  highestSeverity?: Severity;
+}
+
+export interface CategorySummary {
+  categoryCode: string;
+  category: string;
+  total: number;
+  passed: number;
+  issuesFound: number;
+  notTested: number;
+  manualRequired: number;
+}
+
+export interface CoverageReport {
+  results: CheckResult[];
+  categories: CategorySummary[];
+  totalChecks: number;
+  passed: number;
+  issuesFound: number;
+  notTested: number;
+  manualRequired: number;
+  enginesExecuted: string[];
+  enginesUnavailable: string[];
+  automatedCoveragePct: number;
+}
+
 export type ScanRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'zap_dast' | 'nuclei_dast';
+export type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'native' | 'zap_dast' | 'nuclei_dast';
 export type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface ScanRun {
@@ -83,6 +146,7 @@ export interface ScanRun {
   startedAt: string;
   completedAt?: string;
   findingCount: number;
+  enginesExecuted: string[];
   error?: string;
 }
 
@@ -91,9 +155,11 @@ export interface FindingFilter {
   scanId?: string;
   severity?: string;
   owasp2025?: string;
+  wstgId?: string;
   status?: string;
   sourceTool?: string;
   minPriority?: number;
+  search?: string;
 }
 
 export interface CreateProjectInput {
@@ -126,18 +192,26 @@ export interface TriageInput {
   analystName: string;
 }
 
+export type ReportType = 'client' | 'developer' | 'sarif' | 'markdown' | 'json';
+
 export interface GenerateReportInput {
   scanId: string;
-  reportType: 'executive' | 'developer' | 'sarif';
+  reportType: ReportType;
   companyName: string;
   targetName: string;
-  logoPath?: string;
+  targetUrl?: string;
+  analyst?: string;
+  /** Base64 `data:image/...` logo. Remote URLs and SVG are ignored by the engine. */
+  logoDataUri?: string;
 }
 
 export interface GenerateReportOutput {
   reportId: string;
   reportType: string;
-  htmlContent: string;
+  content: string;
+  contentType: string;
+  suggestedFilename: string;
+  findingCount: number;
 }
 
 export interface ReportRecord {

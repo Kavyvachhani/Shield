@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Shield, FolderOpen, ShieldCheck, Activity,
-  AlertOctagon, FileBarChart2, ChevronRight,
+  AlertOctagon, FileBarChart2, ChevronRight, ListChecks,
 } from 'lucide-react';
 import type { Project, Target, AuthorizationRecord } from './types';
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen';
@@ -9,15 +9,17 @@ import { AuthGateScreen } from './screens/AuthGateScreen';
 import { ScanConsoleScreen } from './screens/ScanConsoleScreen';
 import { FindingsWorkbench } from './screens/FindingsWorkbench';
 import { ReportBuilderScreen } from './screens/ReportBuilderScreen';
+import { CoverageScreen } from './screens/CoverageScreen';
 import './index.css';
 
-type Screen = 'setup' | 'auth' | 'console' | 'findings' | 'reports';
+type Screen = 'setup' | 'auth' | 'console' | 'findings' | 'coverage' | 'reports';
 
 const NAV_ITEMS: { id: Screen; label: string; icon: typeof Shield }[] = [
   { id: 'setup',    label: 'Project Setup',   icon: FolderOpen },
   { id: 'auth',     label: 'Auth Gate',        icon: ShieldCheck },
   { id: 'console',  label: 'Scan Console',     icon: Activity },
   { id: 'findings', label: 'Findings',         icon: AlertOctagon },
+  { id: 'coverage', label: 'Coverage',         icon: ListChecks },
   { id: 'reports',  label: 'Reports',          icon: FileBarChart2 },
 ];
 
@@ -33,6 +35,7 @@ export function App() {
     if (id === 'auth') return !!project && !!target;
     if (id === 'console') return !!project && !!target;
     if (id === 'findings') return !!scanRunId;
+    if (id === 'coverage') return !!scanRunId;
     if (id === 'reports') return !!scanRunId;
     return false;
   };
@@ -160,11 +163,15 @@ export function App() {
           {screen === 'findings' && scanRunId && target && (
             <FindingsWorkbench scanId={scanRunId} targetId={target.id} />
           )}
+          {screen === 'coverage' && scanRunId && (
+            <CoverageScreen scanId={scanRunId} />
+          )}
           {screen === 'reports' && project && scanRunId && target && (
             <ReportBuilderScreen
               project={project}
               scanId={scanRunId}
               targetName={target.name}
+              targetUrl={target.baseUrl}
             />
           )}
         </main>

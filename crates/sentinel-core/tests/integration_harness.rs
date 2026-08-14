@@ -6,7 +6,8 @@ use sentinel_core::parser::nuclei::NucleiJsonlParser;
 use sentinel_core::parser::fixtures::*;
 use sentinel_core::dedup::engine::DeduplicationEngine;
 use sentinel_core::scoring::priority::PriorityScoringEngine;
-use sentinel_core::reporting::ReportEngine;
+use sentinel_core::reporting::{ReportContext, ReportEngine};
+use sentinel_core::checklist::ChecklistEngine;
 use sentinel_db::repository::{MemorySentinelRepository, SentinelRepository};
 use uuid::Uuid;
 
@@ -53,20 +54,32 @@ async fn test_end_to_end_integration_pipeline_harness() {
     // Verify top finding has high priority score
     assert!(reloaded[0].priority_score >= 8.0);
 
-    // 6. Generate BOTH reports from persisted findings
-    let exec_report = ReportEngine::generate_client_report_html("Acme Corp", Some("logo.png"), "Acme Portal", &reloaded);
-    let dev_report = ReportEngine::generate_developer_report_html("Acme Portal", &reloaded);
+    // 6. Generate BOTH reports plus the coverage matrix from persisted findings
+    let ctx = ReportContext::new("Acme Corp", "Acme Portal", "https://portal.acme.test");
+    let coverage = ChecklistEngine::assess(
+        &["Sentinel Native".to_string(), "OWASP ZAP".to_string(), "Semgrep".to_string()],
+        &reloaded,
+    );
+    let exec_report = ReportEngine::client_report(&ctx, &reloaded, Some(&coverage));
+    let dev_report = ReportEngine::developer_report(&ctx, &reloaded, Some(&coverage));
     let sarif_report = ReportEngine::generate_sarif_json(&reloaded);
 
     // 7. Assert safety & reporting constraints
-    // Assert no raw CVSS vector string in executive report
+    // The client report must not expose developer-only technical detail
     assert!(!exec_report.contains("CVSS:4.0"));
-    assert!(exec_report.contains("Executive Security Posture"));
+    assert!(exec_report.contains("Executive Summary"));
     assert!(exec_report.contains("PCI DSS v4.0.1"));
+    // The client report must show the full coverage matrix, not only failures
+    assert!(exec_report.contains("Every Check We Performed"));
 
     // Assert developer report contains technical details and vector
     assert!(dev_report.contains("CVSS:4.0"));
-    assert!(dev_report.contains("Developer Technical Remediation Guide"));
+    assert!(dev_report.contains("Technical Remediation Report"));
+    assert!(dev_report.contains("How to fix"));
+
+    // Neither report may contain executable markup, whatever the findings held
+    assert!(!exec_report.contains("<script"));
+    assert!(!dev_report.contains("<script"));
 
     // Assert SARIF JSON is valid
     assert!(sarif_report.contains("\"version\": \"2.1.0\""));

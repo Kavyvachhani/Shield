@@ -1,0 +1,96 @@
+name: Build Installers
+
+# Tauri links against each platform's native webview, so installers must be
+# built on the platform they target. A Windows .exe cannot be produced from
+# macOS or Linux — this workflow is the supported way to get one.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for this build (e.g. 0.2.0)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            name: windows
+            # NSIS produces the user-facing .exe installer; WiX produces the .msi
+            # for Group Policy / Intune deployment.
+            args: '--bundles nsis,msi'
+          - platform: macos-latest
+            name: macos
+            args: '--target universal-apple-darwin --bundles dmg,app'
+          - platform: ubuntu-22.04
+            name: linux
+            args: '--bundles deb,appimage'
+
+    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsecret-1-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          key: ${{ matrix.name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Run test suite
+        run: cargo test --workspace --locked
+
+      - name: Build installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          args: ${{ matrix.args }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinelvapt-${{ matrix.name }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
