@@ -66,6 +66,22 @@ fn extra_stylesheet() -> &'static str {
 ol.steps{margin:4px 0;padding-left:20px}
 ol.steps li{margin-bottom:5px}
 ol.steps code{background:#f1f5f9;padding:1px 5px;border-radius:4px;word-break:break-all}
+
+/* The findings index declares column widths, but without a fixed layout the
+   browser widens the Location column to fit long URLs and crushes the Finding
+   column to one word per line. Fixed layout honours the declared widths and
+   wraps the URL instead. */
+table.index{table-layout:fixed}
+table.index td{vertical-align:top}
+table.index td.loc{font-family:'Cascadia Mono',Consolas,monospace;font-size:10.5px;
+  overflow-wrap:anywhere;word-break:break-word}
+table.index td.title{overflow-wrap:break-word}
+/* "Informational" is the longest severity label and overflowed its cell into
+   the priority column. Let the pill shrink rather than spill. */
+table.index .pill{font-size:10px;padding:2px 7px;max-width:100%}
+/* Keep a row whole; a row split across the page boundary left an orphaned
+   fragment ("in response headers") alone on an otherwise blank page. */
+table.index tr{page-break-inside:avoid;break-inside:avoid}
 "##
 }
 
@@ -74,7 +90,13 @@ fn header(ctx: &ReportContext, counts: &SeverityCounts) -> String {
         .logo_data_uri
         .as_deref()
         .and_then(image_data_uri)
-        .map(|uri| format!(r##"<img src="{uri}" alt="" style="max-height:44px;margin-bottom:16px">"##))
+        // max-width matters as much as max-height: a wide banner logo bounded
+        // only by height renders wider than the page and breaks the layout.
+        .map(|uri| {
+            format!(
+                r##"<img src="{uri}" alt="" style="max-height:44px;max-width:240px;object-fit:contain;margin-bottom:16px">"##
+            )
+        })
         .unwrap_or_default();
 
     format!(
@@ -136,8 +158,8 @@ still require manual analysis.</div>"##
   <td style="text-align:center"><a href="#f{n}">{n}</a></td>
   <td><span class="pill" style="background:{color}">{severity}</span></td>
   <td style="text-align:center;font-weight:600">{score:.1}</td>
-  <td>{title}</td>
-  <td class="small"><code>{component}</code></td>
+  <td class="title">{title}</td>
+  <td class="loc">{component}</td>
   <td class="small">{cwe}</td>
   <td class="small">{status}</td>
 </tr>"##,
@@ -154,11 +176,15 @@ still require manual analysis.</div>"##
         .collect();
 
     format!(
+        // Widths total 100%: the finding title gets the most room, because a
+        // squeezed title column wraps to one word per line and makes the index
+        // unreadable.
         r##"<h2>Findings Index</h2>
-<table>
+<table class="index">
   <thead><tr>
-    <th style="width:40px">#</th><th style="width:90px">Severity</th><th style="width:66px">Priority</th>
-    <th>Finding</th><th style="width:230px">Location</th><th style="width:90px">CWE</th><th style="width:96px">Status</th>
+    <th style="width:4%">#</th><th style="width:14%">Severity</th><th style="width:8%">Priority</th>
+    <th style="width:27%">Finding</th><th style="width:27%">Location</th>
+    <th style="width:10%">CWE</th><th style="width:10%">Status</th>
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>"##

@@ -275,7 +275,21 @@ pre{background:#0f172a;color:#e2e8f0;padding:13px 15px;border-radius:7px;overflo
   body{background:#fff}
   .page{max-width:none;padding:0 12mm}
   h2{page-break-after:avoid}
-  .card,.finding,table,pre{page-break-inside:avoid}
+  /* Deliberately NOT `table{page-break-inside:avoid}`. A table longer than a
+     page cannot honour it, so the browser shunts the whole table to a fresh
+     page and overflows anyway — which left half-empty pages either side of the
+     findings index and the 108-row coverage checklist. Break the table across
+     pages, but keep each row whole and repeat the header. */
+  /* `.finding` is deliberately absent for the same reason: a finding carrying
+     several evidence blocks is taller than a page, so "avoid" only bought a
+     mostly-empty page after each one. Findings flow across pages; the blocks
+     that must never split — evidence, fix, verification, repro steps — are
+     protected individually, and a heading never ends a page alone. */
+  .card,pre,.fix,.warn,.callout,ol.steps li{page-break-inside:avoid}
+  .finding h3,.section-label{page-break-after:avoid}
+  thead{display:table-header-group}
+  tfoot{display:table-footer-group}
+  tr{page-break-inside:avoid;break-inside:avoid}
   .page-break{page-break-before:always}
   @page{size:A4;margin:14mm 0}
 }

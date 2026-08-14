@@ -58,7 +58,9 @@ URL. Redirect the HTTP version of the page to HTTPS rather than serving the form
 const SRI_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-SRI-MISSING",
     title: "Third-Party Script Loaded without Subresource Integrity",
-    severity: Severity::Low,
+    // Medium, not Low: the 4.8 vector below already places this in the Medium
+    // band, and the label must not contradict the score printed beside it.
+    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
     cvss_score: 4.8,
     cwe: "CWE-353",
@@ -186,6 +188,23 @@ unique passwords. Set `autocomplete=\"new-password\"` on password-change fields,
 };
 
 /// Run every passive content check against one HTML response.
+/// Every check this module can raise.
+///
+/// Exposed so the spec audit can walk all shipped checks and confirm each
+/// one carries a coherent CVSS vector, severity band and taxonomy — a
+/// finding whose stated severity disagrees with its score misinforms the
+/// reader of the report.
+pub const SPECS: &[CheckSpec] = &[
+    MIXED_CONTENT,
+    FORM_OVER_HTTP,
+    SRI_MISSING,
+    TABNABBING,
+    STACK_TRACE,
+    COMMENT_LEAK,
+    SESSION_IN_URL,
+    AUTOCOMPLETE_ON,
+];
+
 pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding> {
     let mut findings = Vec::new();
     let url = resp.final_url.as_str();

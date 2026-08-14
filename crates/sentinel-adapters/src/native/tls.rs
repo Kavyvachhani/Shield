@@ -173,6 +173,21 @@ pub struct TlsObservation {
 
 /// Connect, capture the certificate, and return the observation.
 /// Returns `Ok(None)` when the host does not speak TLS on that port.
+/// Every check this module can raise.
+///
+/// Exposed so the spec audit can walk all shipped checks and confirm each
+/// one carries a coherent CVSS vector, severity band and taxonomy — a
+/// finding whose stated severity disagrees with its score misinforms the
+/// reader of the report.
+pub const SPECS: &[CheckSpec] = &[
+    CERT_INVALID,
+    CERT_EXPIRED,
+    CERT_EXPIRING,
+    CERT_HOSTNAME,
+    CERT_WEAK_SIGNATURE,
+    TLS_LEGACY_PROTOCOL,
+];
+
 pub async fn observe(host: &str, port: u16, timeout_secs: u64) -> anyhow::Result<Option<TlsObservation>> {
     let collector = Arc::new(CertCollector::default());
 

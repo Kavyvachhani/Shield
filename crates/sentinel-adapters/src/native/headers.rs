@@ -284,6 +284,28 @@ every authenticated or personalised response.",
 // ── Checks ───────────────────────────────────────────────────────────────────
 
 /// Run every passive header/cookie check against one response.
+/// Every check this module can raise.
+///
+/// Exposed so the spec audit can walk all shipped checks and confirm each
+/// one carries a coherent CVSS vector, severity band and taxonomy — a
+/// finding whose stated severity disagrees with its score misinforms the
+/// reader of the report.
+pub const SPECS: &[CheckSpec] = &[
+    HSTS_MISSING,
+    HSTS_WEAK,
+    CSP_MISSING,
+    CSP_WEAK,
+    XFO_MISSING,
+    XCTO_MISSING,
+    REFERRER_MISSING,
+    PERMISSIONS_MISSING,
+    SERVER_BANNER,
+    COOKIE_INSECURE,
+    COOKIE_NO_HTTPONLY,
+    COOKIE_NO_SAMESITE,
+    CACHE_SENSITIVE,
+];
+
 pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding> {
     let mut findings = Vec::new();
     let url = resp.final_url.as_str();

@@ -73,7 +73,13 @@ fn cover(ctx: &ReportContext) -> String {
         .logo_data_uri
         .as_deref()
         .and_then(image_data_uri)
-        .map(|uri| format!(r##"<img src="{uri}" alt="" style="max-height:52px;margin-bottom:18px">"##))
+        // max-width matters as much as max-height: a wide banner logo bounded
+        // only by height renders wider than the page and breaks the layout.
+        .map(|uri| {
+            format!(
+                r##"<img src="{uri}" alt="" style="max-height:52px;max-width:260px;object-fit:contain;margin-bottom:18px">"##
+            )
+        })
         .unwrap_or_default();
 
     format!(

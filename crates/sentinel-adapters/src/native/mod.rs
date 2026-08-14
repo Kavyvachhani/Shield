@@ -41,6 +41,20 @@ use uuid::Uuid;
 /// Engine name, matching `sentinel_core::checklist::catalog::engine::NATIVE`.
 pub const ENGINE_NAME: &str = "Sentinel Native";
 
+/// Every check the native engine ships, across all modules.
+///
+/// A report is only as trustworthy as the metadata behind each finding, so this
+/// exists to be audited: see `spec_audit` below.
+pub fn all_specs() -> Vec<&'static builder::CheckSpec> {
+    headers::SPECS
+        .iter()
+        .chain(tls::SPECS)
+        .chain(content::SPECS)
+        .chain(exposure::SPECS)
+        .chain(active::SPECS)
+        .collect()
+}
+
 pub struct NativeCheckAdapter;
 
 #[async_trait]

@@ -194,7 +194,9 @@ and place an index file in every served directory.",
 const API_DOCS_EXPOSED: CheckSpec = CheckSpec {
     id: "NATIVE-API-DOCS-EXPOSED",
     title: "API Schema or Documentation Publicly Exposed",
-    severity: Severity::Low,
+    // Matches the 5.3 vector below, which sits in the Medium band. Publishing a
+    // schema is sometimes deliberate; triage it to Accepted Risk when it is.
+    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cvss_score: 5.3,
     cwe: "CWE-1059",
@@ -231,6 +233,25 @@ rather than only at the endpoint, and apply query depth and complexity limits.",
 };
 
 /// The probe list. Ordered roughly by severity of a hit.
+/// Every check this module can raise.
+///
+/// Exposed so the spec audit can walk all shipped checks and confirm each
+/// one carries a coherent CVSS vector, severity band and taxonomy — a
+/// finding whose stated severity disagrees with its score misinforms the
+/// reader of the report.
+pub const SPECS: &[CheckSpec] = &[
+    VCS_EXPOSED,
+    ENV_EXPOSED,
+    BACKUP_EXPOSED,
+    DEBUG_ENDPOINT,
+    ADMIN_INTERFACE,
+    CROSSDOMAIN_POLICY,
+    METAFILE_DISCLOSURE,
+    DIRECTORY_LISTING,
+    API_DOCS_EXPOSED,
+    GRAPHQL_INTROSPECTION,
+];
+
 fn candidates() -> Vec<Candidate> {
     vec![
         Candidate { path: "/.git/HEAD", label: "Git repository metadata", signatures: &["ref:", "refs/heads"], spec: &VCS_EXPOSED },

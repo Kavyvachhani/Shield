@@ -110,7 +110,9 @@ allow-list of real origins and reject anything else, including null.",
 const CORS_WILDCARD: CheckSpec = CheckSpec {
     id: "NATIVE-CORS-WILDCARD",
     title: "CORS Policy Allows All Origins",
-    severity: Severity::Low,
+    // Matches the 5.3 vector below. Distinct from the credentialed reflection
+    // case above, which is High because it exposes authenticated responses.
+    severity: Severity::Medium,
     cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cvss_score: 5.3,
     cwe: "CWE-942",
@@ -197,6 +199,23 @@ such as `https://trusted.example.attacker.test`.",
 };
 
 // ── Runner ───────────────────────────────────────────────────────────────────
+
+/// Every check this module can raise.
+///
+/// Exposed so the spec audit can walk all shipped checks and confirm each
+/// one carries a coherent CVSS vector, severity band and taxonomy — a
+/// finding whose stated severity disagrees with its score misinforms the
+/// reader of the report.
+pub const SPECS: &[CheckSpec] = &[
+    NO_HTTPS,
+    NO_HTTPS_REDIRECT,
+    CORS_WILDCARD_CREDS,
+    CORS_NULL_ORIGIN,
+    CORS_WILDCARD,
+    DANGEROUS_METHODS,
+    HOST_HEADER_REFLECTED,
+    OPEN_REDIRECT,
+];
 
 pub async fn run(
     probe: &Probe,
