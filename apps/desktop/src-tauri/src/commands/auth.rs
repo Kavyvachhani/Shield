@@ -3,6 +3,7 @@ use serde::Deserialize;
 use sha2::{Sha256, Digest};
 use chrono::Utc;
 use crate::state::{log_persist_error, AppState, AuthorizationRecord, ScopeDefinitionRecord, new_id};
+use sentinel_core::auth::gate::AuthorizationGate;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +24,35 @@ pub async fn create_scope_and_roe(
     input: CreateRoEInput,
     state: State<'_, AppState>,
 ) -> Result<AuthorizationRecord, String> {
+    // A scope that does not cover the target's own base URL produces an
+    // engagement that can never scan anything: every dynamic stage is refused
+    // and the run finishes in milliseconds with no findings and no visible
+    // reason. Catch it here, while the analyst is still looking at the scope
+    // form, rather than letting them discover it as a silently empty scan.
+    let base_url = {
+        let targets = state.targets.read().await;
+        targets
+            .get(&input.target_id)
+            .map(|t| t.base_url.clone())
+            .ok_or_else(|| format!("Target '{}' not found", input.target_id))?
+    };
+    if !AuthorizationGate::scope_covers_target(&base_url, &input.scope.allowed_domains) {
+        let host = base_url
+            .rsplit("://")
+            .next()
+            .unwrap_or(&base_url)
+            .split('/')
+            .next()
+            .unwrap_or(&base_url);
+        return Err(format!(
+            "This scope would not authorize scanning the target itself. The target is \
+             '{base_url}', but the allowed domains are {:?} — so every request to \
+             '{host}' would be refused and the scan would find nothing. Add '{host}' \
+             (or a parent domain of it) to the allowed domains.",
+            input.scope.allowed_domains
+        ));
+    }
+
     // Compute SHA-256 of the submitted RoE document
     let mut hasher = Sha256::new();
     hasher.update(input.roe_document_text.as_bytes());

@@ -10,24 +10,35 @@ interface Props {
 }
 
 type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
-type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'zap_dast' | 'nuclei_dast';
+type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'native' | 'zap_dast' | 'nuclei_dast';
 
 interface StageStatus {
   stage: ScanStage;
   label: string;
-  stageType: 'static' | 'dast';
+  stageType: 'static' | 'builtin' | 'dast';
   state: StageState;
   findings: number;
   message: string;
 }
 
+// Must stay in step with BASELINE_STAGES / DAST_STAGES in commands/scan.rs. A
+// stage the backend runs but this list omits emits events that match no row, so
+// its progress and its failures are both invisible — which is exactly how the
+// native engine came to look like it was doing nothing.
 const STAGE_DEFS: StageStatus[] = [
-  { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static', state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static', state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static', state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',   state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',   state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
 ];
+
+const STAGE_TAG: Record<StageStatus['stageType'], string> = {
+  static:  '🔍 STATIC',
+  builtin: '🛡 BUILT-IN',
+  dast:    '⚡ DAST',
+};
 
 const STATE_ICON: Record<StageState, React.ReactNode> = {
   pending: <Clock size={14} style={{ color: 'var(--text-muted)' }} />,
@@ -84,7 +95,7 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   async function startScan() {
     setError('');
     setLogs([]);
-    setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType === 'dast' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
+    setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType !== 'static' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
     setTotalFindings(0);
     setIsRunning(true);
     try {
@@ -151,9 +162,11 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       )}
 
       {/* Stage cards grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         {stages.map((s) => {
-          const isDastLocked = s.stageType === 'dast' && !isAuthorized;
+          // The native engine is auth-gated too — it makes real requests to the
+          // target, so it needs the same signed RoE the DAST stages do.
+          const isDastLocked = s.stageType !== 'static' && !isAuthorized;
           return (
             <div key={s.stage} className="card" style={{
               padding: '14px 16px',
@@ -164,7 +177,7 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 {STATE_ICON[s.state]}
                 <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {s.stageType === 'dast' ? '⚡ DAST' : '🔍 STATIC'}
+                  {STAGE_TAG[s.stageType]}
                 </span>
               </div>
               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 4 }}>{s.label}</div>
