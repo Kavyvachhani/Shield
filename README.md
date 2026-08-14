@@ -28,6 +28,9 @@ a single priority ranking, and reports written for the two audiences that actual
 - **Extends with what you have.** Semgrep, Trivy, Gitleaks, OWASP ZAP and Nuclei are
   detected automatically on `PATH` and in the conventional install locations. Missing
   engines are skipped with an explanation rather than failing the run.
+- **Scans behind a login.** Supply a session cookie, HTTP Basic credentials, a bearer
+  token or an API key header, and the native engine assesses the authenticated pages
+  too. Secrets live in the OS keychain, never in the engagement database or a report.
 - **Ranks by real risk.** Priority combines CVSS 4.0, EPSS probability, CISA KEV
   membership, reachability and exposure — so the list is ordered by what matters, not by
   raw scanner severity.
@@ -51,7 +54,8 @@ enforced in code and cannot be disabled by configuration.
 - Nuclei runs with `-etags dos,fuzzing,intrusive` and `-no-interactsh` regardless of user
   configuration.
 - Credentials, session cookies and authorization headers are redacted before any evidence
-  reaches a report.
+  reaches a report. Scan credentials are held in the OS keychain and applied as request
+  headers only — authenticating widens what the engine can read, never what it can change.
 
 **Only test systems you are authorised to test.**
 

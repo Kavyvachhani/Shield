@@ -1,5 +1,6 @@
 pub mod adapter_trait;
 pub mod runner;
+pub mod credentials;
 pub mod dast_config;
 pub mod auth_gated_runner;
 pub mod orchestrator;

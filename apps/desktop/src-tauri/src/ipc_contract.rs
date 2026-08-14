@@ -152,6 +152,52 @@ fn report_inputs_accept_the_frontend_payload() {
     assert_eq!(export.export_path, "/tmp/out.html");
 }
 
+#[test]
+fn set_credentials_accepts_the_frontend_payload() {
+    use crate::commands::targets::SetCredentialsInput;
+
+    let input: SetCredentialsInput = serde_json::from_value(json!({
+        "targetId": "t-1",
+        "kind": "basic",
+        "username": "admin",
+        "secret": "hunter2",
+        "headerName": null,
+    }))
+    .expect("frontend camelCase payload must deserialize");
+
+    assert_eq!(input.target_id, "t-1");
+    assert_eq!(input.kind, "basic");
+    assert_eq!(input.username.as_deref(), Some("admin"));
+    assert_eq!(input.secret, "hunter2");
+
+    // The cookie form omits username entirely.
+    let cookie: SetCredentialsInput = serde_json::from_value(json!({
+        "targetId": "t-1",
+        "kind": "cookie",
+        "secret": "session=abc123",
+    }))
+    .expect("a credential without a username must still deserialize");
+    assert_eq!(cookie.kind, "cookie");
+    assert!(cookie.username.is_none());
+}
+
+#[test]
+fn credential_status_never_carries_the_secret_to_the_frontend() {
+    use crate::commands::targets::CredentialStatus;
+
+    let status = CredentialStatus {
+        configured: true,
+        description: Some("HTTP Basic as 'admin'".into()),
+    };
+    let v = serde_json::to_value(&status).unwrap();
+    assert_keys(&v, &["configured", "description"]);
+
+    // The shape must not grow a secret-bearing field by accident.
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 2, "CredentialStatus gained a field: {:?}", obj.keys().collect::<Vec<_>>());
+    assert!(!serde_json::to_string(&status).unwrap().contains("hunter2"));
+}
+
 // ── Outbound: keys the frontend reads back ───────────────────────────────────
 
 /// Every key the frontend indexes must be present under that exact name.

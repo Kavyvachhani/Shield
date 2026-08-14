@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { FolderOpen, Globe, Code2, Cpu, ChevronRight, Plus, CheckCircle2 } from 'lucide-react';
-import type { Project, Target, CreateProjectInput, CreateTargetInput } from '../types';
+import { FolderOpen, Globe, Code2, Cpu, ChevronRight, Plus, CheckCircle2, KeyRound } from 'lucide-react';
+import type { Project, Target, CreateProjectInput, CreateTargetInput, CredentialKind } from '../types';
 import { api } from '../lib/tauri';
 
 interface Props {
@@ -32,6 +32,13 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
   const [baseUrl, setBaseUrl]             = useState('');
   const [repoRef, setRepoRef]             = useState('');
   const [stackDesc, setStackDesc]         = useState('');
+
+  // Optional scan credentials. Kept out of the target payload entirely: the
+  // secret is sent on its own to the keychain after the target exists.
+  const [credKind, setCredKind]             = useState<CredentialKind | 'none'>('none');
+  const [credUsername, setCredUsername]     = useState('');
+  const [credSecret, setCredSecret]         = useState('');
+  const [credHeaderName, setCredHeaderName] = useState('');
 
   async function handleCreateProject(e: React.FormEvent) {
     e.preventDefault();
@@ -76,6 +83,29 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
         stackDescription: stackDesc.trim() || undefined,
       };
       const t = await api.createTarget(input);
+
+      // Credentials are stored against the target, so this can only happen once
+      // the target exists. A rejected credential must not strand the analyst on
+      // a target that was already created, so report it and continue.
+      if (credKind !== 'none' && credSecret.trim()) {
+        try {
+          await api.setTargetCredentials({
+            targetId: t.id,
+            kind: credKind,
+            username: credUsername.trim() || undefined,
+            secret: credSecret,
+            headerName: credHeaderName.trim() || undefined,
+          });
+        } catch (credErr) {
+          setError(
+            `The target was created, but the credential was not saved: ${credErr}. ` +
+            `You can add it again from the scan console.`
+          );
+          setSaving(false);
+          return;
+        }
+      }
+
       onProjectTargetReady(project, t);
     } catch (err) {
       setError(String(err));
@@ -180,6 +210,13 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
             <Field label="Technology Stack (optional)" hint="Helps contextualize findings">
               <Input value={stackDesc} onChange={setStackDesc} placeholder="Node.js 18 / Express / PostgreSQL / Docker" />
             </Field>
+
+            <CredentialsFields
+              kind={credKind} setKind={setCredKind}
+              username={credUsername} setUsername={setCredUsername}
+              secret={credSecret} setSecret={setCredSecret}
+              headerName={credHeaderName} setHeaderName={setCredHeaderName}
+            />
           </FieldGroup>
 
           {error && <ErrorBox msg={error} />}
@@ -195,6 +232,110 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
+
+const CRED_OPTIONS: { value: CredentialKind | 'none'; label: string; hint: string }[] = [
+  { value: 'none',   label: 'None',          hint: 'Scan only what is reachable without signing in.' },
+  { value: 'cookie', label: 'Session cookie', hint: 'Log in with your browser, copy the session cookie from DevTools → Application → Cookies, and paste it here. This is the one that works for a normal login form.' },
+  { value: 'basic',  label: 'Username & password', hint: 'HTTP Basic auth — the browser popup style, not a login page.' },
+  { value: 'bearer', label: 'Bearer token',  hint: 'Sent as Authorization: Bearer <token>. For APIs and JWT-based apps.' },
+  { value: 'header', label: 'API key header', hint: 'Any custom header, e.g. X-API-Key.' },
+];
+
+/**
+ * Credentials let the engine assess pages behind a login, which is most of an
+ * application. The secret goes to the OS keychain, never to the engagement
+ * database, and the engine still only issues GET, HEAD and OPTIONS — signing in
+ * widens what can be read, never what can be changed.
+ */
+function CredentialsFields({
+  kind, setKind, username, setUsername, secret, setSecret, headerName, setHeaderName,
+}: {
+  kind: CredentialKind | 'none';
+  setKind: (v: CredentialKind | 'none') => void;
+  username: string; setUsername: (v: string) => void;
+  secret: string;   setSecret: (v: string) => void;
+  headerName: string; setHeaderName: (v: string) => void;
+}) {
+  const selected = CRED_OPTIONS.find((o) => o.value === kind);
+
+  return (
+    <div style={{
+      border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)',
+      padding: 14, background: 'rgba(255,255,255,0.02)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <KeyRound size={14} style={{ color: 'var(--cyan)' }} />
+        <span style={{
+          fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)',
+          letterSpacing: '0.03em', textTransform: 'uppercase',
+        }}>
+          Scan Credentials (optional)
+        </span>
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+        Most of an application sits behind a login. Supply credentials and the engine
+        assesses the authenticated pages too. Stored in your OS keychain — never in the
+        engagement file, never in a report.
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 10 }}>
+        {CRED_OPTIONS.map((o) => (
+          <button
+            key={o.value} type="button"
+            onClick={() => setKind(o.value)}
+            style={{
+              padding: '8px 6px', borderRadius: 'var(--radius-sm)',
+              border: `1px solid ${kind === o.value ? 'var(--cyan)' : 'var(--border-strong)'}`,
+              background: kind === o.value ? 'rgba(34,211,238,0.08)' : 'var(--bg-elevated)',
+              color: kind === o.value ? 'var(--cyan)' : 'var(--text-secondary)',
+              cursor: 'pointer', fontSize: 11, fontWeight: 500, transition: 'all 0.15s',
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+
+      {selected && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: kind === 'none' ? 0 : 12 }}>
+          {selected.hint}
+        </div>
+      )}
+
+      {kind === 'basic' && (
+        <Field label="Username" required>
+          <Input value={username} onChange={setUsername} placeholder="admin" />
+        </Field>
+      )}
+
+      {kind === 'header' && (
+        <Field label="Header Name" hint="Defaults to X-API-Key">
+          <Input value={headerName} onChange={setHeaderName} placeholder="X-API-Key" mono />
+        </Field>
+      )}
+
+      {kind !== 'none' && (
+        <div style={{ marginTop: kind === 'basic' || kind === 'header' ? 12 : 0 }}>
+          <Field
+            label={
+              kind === 'basic'  ? 'Password' :
+              kind === 'bearer' ? 'Token' :
+              kind === 'cookie' ? 'Cookie' : 'API Key'
+            }
+            required
+          >
+            <Input
+              value={secret} onChange={setSecret}
+              placeholder={kind === 'cookie' ? 'session=abc123; csrf=xyz' : '••••••••'}
+              mono={kind !== 'basic'}
+              secret={kind === 'basic'}
+            />
+          </Field>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
   return (
@@ -224,12 +365,14 @@ function Field({ label, children, required, hint }: { label: string; children: R
   );
 }
 
-function Input({ value, onChange, placeholder, mono }: { value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
+function Input({ value, onChange, placeholder, mono, secret }: { value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean; secret?: boolean }) {
   return (
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      type={secret ? 'password' : 'text'}
+      autoComplete={secret ? 'new-password' : undefined}
       style={{
         width: '100%', padding: '9px 12px',
         background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',

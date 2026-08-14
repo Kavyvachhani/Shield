@@ -35,6 +35,10 @@ fn main() {
             commands::targets::list_targets,
             commands::targets::get_target,
             commands::targets::update_target_repo,
+            // Scan credentials (secret lives in the OS keychain, never the DB)
+            commands::targets::set_target_credentials,
+            commands::targets::clear_target_credentials,
+            commands::targets::get_target_credential_status,
             // Authorization / RoE
             commands::auth::create_scope_and_roe,
             commands::auth::verify_authorization,

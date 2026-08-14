@@ -178,6 +178,30 @@ export interface CreateTargetInput {
   stackDescription?: string;
 }
 
+/** How a stored credential is presented to the target. */
+export type CredentialKind = 'basic' | 'bearer' | 'cookie' | 'header';
+
+export interface SetCredentialsInput {
+  targetId: string;
+  kind: CredentialKind;
+  /** Username, for `basic`. */
+  username?: string;
+  /** Password, token, or cookie string, depending on `kind`. */
+  secret: string;
+  /** Header name, for `header`. Defaults to `X-API-Key`. */
+  headerName?: string;
+}
+
+/**
+ * What the UI is allowed to know about a stored credential. The secret lives in
+ * the OS keychain and is never returned — it can be replaced or removed, but
+ * not read back.
+ */
+export interface CredentialStatus {
+  configured: boolean;
+  description?: string;
+}
+
 export interface CreateRoEInput {
   targetId: string;
   scope: ScopeDefinition;

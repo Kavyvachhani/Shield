@@ -97,6 +97,41 @@ so you can decide whether installing it is worth it for a given engagement.
 
 ---
 
+## Scanning behind a login
+
+Most of an application sits behind a sign-in page, so an unauthenticated scan only
+ever sees the front door. On the target setup step you can supply credentials, and
+the native engine will then assess the authenticated pages too.
+
+| Mode | Use it when | What to enter |
+|---|---|---|
+| **Session cookie** | The app has a normal login form. **This is usually the right one.** | Log in with your browser, open DevTools → Application → Cookies, copy the session cookie — e.g. `session=abc123` |
+| **Username & password** | The app uses HTTP Basic (the browser popup, not a login page) | The username and password |
+| **Bearer token** | REST/GraphQL APIs, JWT-based apps | The token — sent as `Authorization: Bearer <token>` |
+| **API key header** | The API expects a custom header | The header name (default `X-API-Key`) and the key |
+
+The engine cannot submit a login form itself, because doing so would mean sending a
+POST — and it is restricted to `GET`, `HEAD` and `OPTIONS` by design. Pasting a
+session cookie from a browser you have already logged into achieves the same result
+without relaxing that guarantee. For full form-login automation, configure ZAP,
+which drives a real login sequence.
+
+**How the secret is handled**
+
+- It goes to the OS keychain — macOS Keychain, Windows Credential Manager, Linux
+  libsecret. Only an opaque handle is written to the engagement database, so the
+  `.db` file can be copied or backed up without carrying the password.
+- The app never reads it back to the screen. It can be replaced or removed, not viewed.
+- `Authorization` and `Cookie` are redacted before any evidence reaches a report.
+- Authenticating widens what the engine can **read**, never what it can change: the
+  `GET`/`HEAD`/`OPTIONS` restriction still applies, and out-of-scope hosts are still
+  refused.
+
+Use an account created for testing rather than a real user's, and expect the scan to
+generate activity in that account's audit log.
+
+---
+
 ## Running an assessment
 
 1. **Project Setup** — enter the client name and the target application URL.

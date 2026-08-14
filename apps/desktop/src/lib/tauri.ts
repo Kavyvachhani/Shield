@@ -11,6 +11,7 @@ import type {
   Project, Target, AuthorizationRecord, ScanRun, Finding,
   ReportRecord, GenerateReportOutput, FindingDetail, CoverageReport,
   CreateProjectInput, CreateTargetInput, CreateRoEInput,
+  SetCredentialsInput, CredentialStatus,
   TriageInput, FindingFilter, GenerateReportInput,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
 } from '../types';
@@ -40,6 +41,17 @@ export const api = {
 
   updateTargetRepo: (targetId: string, repoRef: string): Promise<Target> =>
     invoke('update_target_repo', { targetId, repoRef }),
+
+  // Scan credentials. The secret goes straight to the OS keychain; only the
+  // status ever comes back, never the value.
+  setTargetCredentials: (input: SetCredentialsInput): Promise<CredentialStatus> =>
+    invoke('set_target_credentials', { input }),
+
+  clearTargetCredentials: (targetId: string): Promise<CredentialStatus> =>
+    invoke('clear_target_credentials', { targetId }),
+
+  getTargetCredentialStatus: (targetId: string): Promise<CredentialStatus> =>
+    invoke('get_target_credential_status', { targetId }),
 
   // Authorization / RoE
   createScopeAndRoe: (input: CreateRoEInput): Promise<AuthorizationRecord> =>

@@ -10,6 +10,7 @@
 //!   • redirects are captured rather than followed blindly, so a redirect
 //!     off-scope cannot smuggle the scanner onto a third-party host
 
+use crate::credentials::{CredentialKind, TargetCredential};
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, StatusCode};
@@ -214,6 +215,10 @@ pub struct Probe {
     limiter: RateLimiter,
     scope: ScopeRules,
     max_body_bytes: usize,
+    /// Credential replayed on every request, when the target has one stored.
+    /// Applied as a request header only — it widens what the engine can read,
+    /// never what it can change.
+    credential: Option<TargetCredential>,
 }
 
 impl Probe {
@@ -228,12 +233,55 @@ impl Probe {
             .build()
             .context("failed to construct native probe HTTP client")?;
 
+        // A credential is optional, and a keychain that cannot be read must not
+        // abort the assessment — an unauthenticated scan is still a real scan,
+        // so the failure is reported and the run continues.
+        let credential = match target.auth_keychain_handle.as_deref() {
+            Some(handle) => match TargetCredential::load(handle) {
+                Ok(Some(cred)) => {
+                    tracing::info!(auth = %cred.describe(), "native probe: scanning authenticated");
+                    Some(cred)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(error = %e, "native probe: continuing unauthenticated");
+                    None
+                }
+            },
+            None => None,
+        };
+
         Ok(Self {
             client,
             limiter: RateLimiter::new(rps),
             scope: ScopeRules::from_target(target),
             max_body_bytes: 512 * 1024,
+            credential,
         })
+    }
+
+    /// Build a probe with an already-resolved credential, bypassing the
+    /// keychain. Used by tests and by callers that hold the credential
+    /// directly; `new` is the normal path.
+    pub fn with_credential(
+        target: &Target,
+        rps: u32,
+        timeout_secs: u64,
+        credential: Option<TargetCredential>,
+    ) -> Result<Self> {
+        let mut probe = Self::new(target, rps, timeout_secs)?;
+        probe.credential = credential;
+        Ok(probe)
+    }
+
+    /// Whether this probe is replaying a credential, for reporting.
+    pub fn is_authenticated(&self) -> bool {
+        self.credential.is_some()
+    }
+
+    /// How the probe is authenticating, with no secret in the string.
+    pub fn auth_description(&self) -> Option<String> {
+        self.credential.as_ref().map(|c| c.describe())
     }
 
     pub fn scope(&self) -> &ScopeRules {
@@ -264,6 +312,18 @@ impl Probe {
         self.limiter.acquire().await;
 
         let mut headers = HeaderMap::new();
+        // The credential goes on first, so a check that deliberately sets its
+        // own Authorization or Cookie header (the CORS and session checks do)
+        // still overrides it rather than being silently overwritten.
+        if let Some((name, value)) = self.credential.as_ref().and_then(|c| c.header()) {
+            if let (Ok(name), Ok(mut value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&value),
+            ) {
+                value.set_sensitive(true);
+                headers.insert(name, value);
+            }
+        }
         for (name, value) in extra_headers {
             let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else { continue };
             let Ok(value) = HeaderValue::from_str(value) else { continue };
@@ -273,14 +333,20 @@ impl Probe {
         let http_method = Method::from_bytes(method_upper.as_bytes())
             .with_context(|| format!("invalid HTTP method '{method_upper}'"))?;
 
+        let mut builder = self.client.request(http_method, parsed.clone()).headers(headers);
+        // Basic is encoded by the client rather than hand-rolled, so the
+        // base64 and the `user:pass` framing follow RFC 7617 exactly.
+        if let Some(cred) = self.credential.as_ref() {
+            if cred.kind == CredentialKind::Basic {
+                builder = builder.basic_auth(
+                    cred.username.as_deref().unwrap_or_default(),
+                    Some(cred.secret.as_str()),
+                );
+            }
+        }
+
         let started = Instant::now();
-        let response = match self
-            .client
-            .request(http_method, parsed.clone())
-            .headers(headers)
-            .send()
-            .await
-        {
+        let response = match builder.send().await {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(%url, error = %e, "native probe request failed");

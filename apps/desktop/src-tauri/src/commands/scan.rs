@@ -12,6 +12,14 @@ pub struct TriggerScanInput {
     pub config_json: Option<String>,
 }
 
+/// Stages that run on every scan. Semgrep, Trivy and Gitleaks need a source
+/// repository and skip without one; Sentinel Native needs only the target URL,
+/// so it is what makes a URL-only engagement produce results at all.
+const BASELINE_STAGES: &[&str] = &["semgrep", "trivy", "gitleaks", "native"];
+
+/// Stages added when the analyst opts into active DAST.
+const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast"];
+
 /// Trigger the full ScanOrchestrator pipeline for a target.
 ///
 /// SAFETY: If `run_dast = true`, the command layer checks for a signed
@@ -109,15 +117,20 @@ pub async fn trigger_scan(
         let auth_record = auth_records_clone.read().await.get(&target_id_clone).cloned();
         let core_target = build_core_target(&target_rec, auth_record);
 
-        // The native engine leads the dynamic stages: it is always available, so
-        // a target with no third-party scanners installed still gets a real
-        // assessment rather than three skipped stages.
-        let stages = ["semgrep", "trivy", "gitleaks", "native", "zap_dast", "nuclei_dast"];
-        let stage_count = if run_dast { 6 } else { 3 };
+        // The native engine is part of the baseline, not an opt-in extra: it
+        // ships inside the app, so a target with no third-party scanners
+        // installed still gets a real assessment rather than three skipped
+        // stages. It stays wrapped in the RoE gate, which is what keeps it
+        // honest — the gate refuses it when no authorization has been signed.
+        let stages: Vec<&str> = BASELINE_STAGES
+            .iter()
+            .chain(if run_dast { DAST_STAGES } else { &[] })
+            .copied()
+            .collect();
         let mut total_findings = 0usize;
         let mut engines_executed: Vec<String> = Vec::new();
 
-        for (idx, stage_name) in stages.iter().take(stage_count).enumerate() {
+        for (idx, stage_name) in stages.iter().enumerate() {
             let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
                 scan_run_id: run_id_clone.clone(),
                 stage: stage_name.to_string(),
@@ -177,7 +190,15 @@ pub async fn trigger_scan(
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    let is_skip = msg.contains("not found on PATH") || msg.contains("not found or unreachable");
+                    // A missing scanner, an unreachable daemon, or a stage the
+                    // RoE gate declined are all "this did not run" rather than
+                    // "this broke" — surfacing them as failures reads as a bug
+                    // in the app when it is really a setup or authorization
+                    // state the analyst can act on.
+                    let is_skip = msg.contains("not found on PATH")
+                        || msg.contains("not found or unreachable")
+                        || msg.contains("AUTH GATE BLOCKED")
+                        || msg.contains("no source repository");
                     let stage_state = if is_skip { "skipped" } else { "failed" };
                     let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
                         scan_run_id: run_id_clone.clone(),
@@ -355,5 +376,119 @@ mod tests {
     #[test]
     fn native_stage_name_matches_the_checklist_catalog() {
         assert_eq!(engine_name("native"), sentinel_core::checklist::catalog::engine::NATIVE);
+    }
+
+    /// The native engine is the only one that needs nothing installed and no
+    /// source repository, so a scan that omits it produces nothing at all for a
+    /// URL-only target. It previously sat behind a `.take(3)` that excluded it
+    /// from every non-DAST run, which made the default scan look broken.
+    #[test]
+    fn a_default_scan_still_runs_the_native_engine() {
+        assert!(
+            BASELINE_STAGES.contains(&"native"),
+            "native must run without opting into DAST, or a URL-only target yields no findings"
+        );
+    }
+
+    #[test]
+    fn dast_stages_are_additive_and_never_the_whole_run() {
+        for stage in DAST_STAGES {
+            assert!(
+                !BASELINE_STAGES.contains(stage),
+                "{stage} would run without the analyst opting into DAST"
+            );
+        }
+        assert!(DAST_STAGES.contains(&"zap_dast") && DAST_STAGES.contains(&"nuclei_dast"));
+    }
+
+    /// End-to-end proof that a default scan of a URL-only target actually
+    /// produces findings, exercised through the same `run_stage_for` the
+    /// command uses. This is the scenario that was broken: an analyst enters a
+    /// URL, signs the RoE, presses Start, and previously got three skipped
+    /// stages and an empty findings table.
+    #[tokio::test]
+    async fn a_url_only_target_produces_findings_on_a_default_scan() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // A deliberately misconfigured server: no security headers at all.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+                    let body = "<html><body><a href='http://evil.example' target='_blank'>x</a></body></html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: text/html\r\n\
+                         Set-Cookie: session=abc123\r\n\
+                         Server: nginx/1.18.0\r\n\
+                         Content-Length: {}\r\n\
+                         Connection: close\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let target_record = crate::state::TargetRecord {
+            id: new_id(),
+            project_id: new_id(),
+            name: "Local test".into(),
+            target_type: "Web App".into(),
+            base_url: format!("http://{addr}"),
+            repo_ref: None, // URL only — no source code, as in the failing case
+            stack_description: None,
+            auth_keychain_handle: None,
+            created_at: Utc::now(),
+        };
+
+        let auth = crate::state::AuthorizationRecord {
+            id: new_id(),
+            target_id: target_record.id.clone(),
+            scope: crate::state::ScopeDefinitionRecord {
+                allowed_domains: vec!["127.0.0.1".into()],
+                allowed_ips_cidrs: vec![],
+                out_of_scope_paths: vec![],
+                rate_limit_rps: 50,
+                prohibited_actions: vec![],
+            },
+            acknowledged_by: "Test Analyst".into(),
+            signed_at: Utc::now(),
+            roe_document_hash: "hash".into(),
+        };
+
+        let core_target = build_core_target(&target_record, Some(auth));
+
+        // Run exactly the stages a default (non-DAST) scan runs.
+        let mut total = 0usize;
+        let mut ran: Vec<&str> = Vec::new();
+        for stage in BASELINE_STAGES {
+            if let Ok(findings) = run_stage_for(stage, &core_target, "").await {
+                ran.push(stage);
+                total += findings.len();
+            }
+        }
+
+        assert!(
+            ran.contains(&"native"),
+            "the native stage did not run; a URL-only scan cannot produce anything without it"
+        );
+        assert!(
+            total > 0,
+            "a default scan of a server with no security headers produced no findings"
+        );
+    }
+
+    #[test]
+    fn every_stage_that_can_run_has_a_label_and_engine_name() {
+        for stage in BASELINE_STAGES.iter().chain(DAST_STAGES) {
+            assert_ne!(engine_name(stage), "Unknown", "{stage} has no engine mapping");
+            assert_ne!(engine_label(stage), "Unknown stage", "{stage} has no label");
+        }
     }
 }
