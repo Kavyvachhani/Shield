@@ -267,12 +267,13 @@ impl Store {
     /// stale record is far better than an app that will not open.
     pub fn load_all(&self) -> Result<LoadedState> {
         let conn = self.lock()?;
-        let mut out = LoadedState::default();
-
-        out.projects = query_json(&conn, "SELECT json FROM projects")?;
-        out.targets = query_json(&conn, "SELECT json FROM targets")?;
-        out.scan_runs = query_json(&conn, "SELECT json FROM scan_runs")?;
-        out.reports = query_json(&conn, "SELECT json FROM reports")?;
+        let mut out = LoadedState {
+            projects: query_json(&conn, "SELECT json FROM projects")?,
+            targets: query_json(&conn, "SELECT json FROM targets")?,
+            scan_runs: query_json(&conn, "SELECT json FROM scan_runs")?,
+            reports: query_json(&conn, "SELECT json FROM reports")?,
+            ..Default::default()
+        };
 
         {
             let mut stmt = conn.prepare("SELECT target_id, json FROM auth_records")?;
@@ -499,7 +500,7 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let f = finding("XSS", 8.0);
         let id = f.id.to_string();
-        store.save_findings("s1", &[f.clone()]).unwrap();
+        store.save_findings("s1", std::slice::from_ref(&f)).unwrap();
 
         let mut updated = f;
         updated.status = FindingStatus::Remediated;

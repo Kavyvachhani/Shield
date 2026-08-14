@@ -72,7 +72,7 @@ impl SemgrepAdapter {
         walk(std::path::Path::new(repo_path), 0, &mut counts, ext_map);
 
         let mut sorted: Vec<(&str, usize)> = counts.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         sorted.into_iter().map(|(l, _)| l.to_string()).collect()
     }
 }

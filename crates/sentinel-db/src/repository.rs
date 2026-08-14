@@ -82,6 +82,12 @@ pub struct MemorySentinelRepository {
     audit_logs: std::sync::Arc<tokio::sync::Mutex<Vec<AuditLogEntryEntity>>>,
 }
 
+impl Default for MemorySentinelRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemorySentinelRepository {
     pub fn new() -> Self {
         Self {

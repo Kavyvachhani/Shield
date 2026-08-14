@@ -35,7 +35,7 @@ pub async fn create_project(
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectRecord>, String> {
     let map = state.projects.read().await;
     let mut records: Vec<ProjectRecord> = map.values().cloned().collect();
-    records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
     Ok(records)
 }
 

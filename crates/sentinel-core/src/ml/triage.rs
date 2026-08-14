@@ -9,11 +9,10 @@ impl LocalMLTriageEngine {
         let mut score: f64 = 0.05; // Base low FP score
 
         // Heuristic 1: Theoretical SAST finding with no runtime evidence
-        if finding.source_tools.len() == 1 && finding.source_tools.contains(&"Semgrep SAST".to_string()) {
-            if finding.reachability_score < 0.8 {
+        if finding.source_tools.len() == 1 && finding.source_tools.contains(&"Semgrep SAST".to_string())
+            && finding.reachability_score < 0.8 {
                 score += 0.25; // Increase FP likelihood if unreachable code sink
             }
-        }
 
         // Heuristic 2: Known test or mock environment paths
         if finding.affected_component.contains("/test/") || finding.affected_component.contains("/mock/") {

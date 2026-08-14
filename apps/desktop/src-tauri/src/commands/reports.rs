@@ -224,7 +224,7 @@ pub async fn list_reports(
         .filter(|r| r.scan_id == scan_id)
         .cloned()
         .collect();
-    records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
     Ok(records)
 }
 

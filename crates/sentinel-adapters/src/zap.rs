@@ -95,11 +95,11 @@ impl ZapDastAdapter {
 
         // Resolve credentials from OS keychain — never log the values
         let username = auth.username_keychain_handle.as_deref()
-            .map(|h| crate::dast_config::ZapAuthConfig::resolve_keychain(h))
+            .map(crate::dast_config::ZapAuthConfig::resolve_keychain)
             .transpose()?
             .unwrap_or_default();
         let password = auth.password_keychain_handle.as_deref()
-            .map(|h| crate::dast_config::ZapAuthConfig::resolve_keychain(h))
+            .map(crate::dast_config::ZapAuthConfig::resolve_keychain)
             .transpose()?
             .unwrap_or_default();
 

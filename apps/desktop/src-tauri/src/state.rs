@@ -219,7 +219,8 @@ impl AppState {
             crate::store::LoadedState::default()
         });
 
-        let state = Self {
+        
+        Self {
             projects: Arc::new(RwLock::new(
                 loaded.projects.into_iter().map(|p| (p.id.clone(), p)).collect(),
             )),
@@ -237,8 +238,7 @@ impl AppState {
             )),
             active_scans: Arc::new(RwLock::new(HashMap::new())),
             store: Arc::new(store),
-        };
-        state
+        }
     }
 }
 

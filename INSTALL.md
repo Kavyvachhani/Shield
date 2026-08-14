@@ -19,7 +19,7 @@ all three platforms.
 
 ```bash
 git push origin main          # then, to cut a release:
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 Or trigger it manually: **Actions → Build Installers → Run workflow**.
@@ -28,8 +28,8 @@ Download from the run's artifacts:
 
 | Artifact | Contents |
 |---|---|
-| `sentinelvapt-windows` | `SentinelVAPT_0.2.0_x64-setup.exe` (NSIS) and `SentinelVAPT_0.2.0_x64_en-US.msi` (for Intune / Group Policy) |
-| `sentinelvapt-macos` | `SentinelVAPT_0.2.0_universal.dmg` |
+| `sentinelvapt-windows` | `SentinelVAPT_0.2.1_x64-setup.exe` (NSIS) and `SentinelVAPT_0.2.1_x64_en-US.msi` (for Intune / Group Policy) |
+| `sentinelvapt-macos` | `SentinelVAPT_0.2.1_universal.dmg` |
 | `sentinelvapt-linux` | `.deb` and `.AppImage` |
 
 ### Option B — build on a Windows machine
@@ -66,9 +66,9 @@ the app → **Open** → **Open** to bypass Gatekeeper on the unsigned build.
 ### Linux
 
 ```bash
-sudo apt install -y ./sentinel-desktop_0.2.0_amd64.deb
+sudo apt install -y ./sentinel-desktop_0.2.1_amd64.deb
 # or
-chmod +x SentinelVAPT_0.2.0_amd64.AppImage && ./SentinelVAPT_0.2.0_amd64.AppImage
+chmod +x SentinelVAPT_0.2.1_amd64.AppImage && ./SentinelVAPT_0.2.1_amd64.AppImage
 ```
 
 ---

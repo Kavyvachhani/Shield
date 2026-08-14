@@ -426,11 +426,9 @@ fn sarif_rule_id(f: &Finding) -> String {
 
 fn sarif_tags(f: &Finding) -> Vec<String> {
     let mut tags = vec!["security".to_string()];
-    for value in [&f.cwe_id, &f.owasp_2025, &f.wstg_id, &f.api_top10] {
-        if let Some(v) = value {
-            if !v.trim().is_empty() {
-                tags.push(v.clone());
-            }
+    for v in [&f.cwe_id, &f.owasp_2025, &f.wstg_id, &f.api_top10].into_iter().flatten() {
+        if !v.trim().is_empty() {
+            tags.push(v.clone());
         }
     }
     tags
