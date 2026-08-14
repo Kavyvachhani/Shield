@@ -57,14 +57,29 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   const [totalFindings, setTotalFindings] = useState(0);
   const [error, setError] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
+  // Tracks whether any backend event has arrived for the current run, so a
+  // pipeline that never reports in can be told apart from one that is simply
+  // slow. Kept in a ref because the watchdog timer closes over it.
+  const sawEventRef = useRef(false);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isAuthorized = !!authRecord;
+
+  /// Append a line the console itself produced, so the log distinguishes
+  /// "the UI never asked for a scan" from "the engine never answered".
+  function localLog(message: string, level: 'info' | 'warn' | 'error' = 'info') {
+    setLogs((prev) => [
+      ...prev.slice(-199),
+      { scanRunId: '', stage: 'console', level, message, timestamp: new Date().toISOString() },
+    ]);
+  }
 
   // Subscribe to Tauri scan events
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
 
     events.onStageUpdate((p) => {
+      sawEventRef.current = true;
       const stage = p.stage as ScanStage;
       setTotalFindings(p.totalFindings);
       setStages(prev => prev.map(s =>
@@ -73,11 +88,14 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     }).then(u => unlisteners.push(u));
 
     events.onLog((p) => {
+      sawEventRef.current = true;
       setLogs(prev => [...prev.slice(-199), p]);
       setTimeout(() => { logRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, 50);
     }).then(u => unlisteners.push(u));
 
     events.onComplete((p) => {
+      sawEventRef.current = true;
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
       setIsRunning(false);
       setScanRunId(p.scanRunId);
       setTotalFindings(p.totalFindings);
@@ -85,11 +103,16 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     }).then(u => unlisteners.push(u));
 
     events.onError((p) => {
+      sawEventRef.current = true;
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
       setIsRunning(false);
       setError(p.error);
     }).then(u => unlisteners.push(u));
 
-    return () => { unlisteners.forEach(u => u()); };
+    return () => {
+      unlisteners.forEach(u => u());
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    };
   }, [onScanComplete]);
 
   async function startScan() {
@@ -98,10 +121,37 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType !== 'static' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
     setTotalFindings(0);
     setIsRunning(true);
+    sawEventRef.current = false;
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+
+    const dast = runDast && isAuthorized;
+    localLog(`Requesting scan of ${target.baseUrl} (DAST ${dast ? 'on' : 'off'})...`);
+
+    // If the engine has said nothing at all after this long, the run is not
+    // merely slow — the command never returned or its events are not reaching
+    // this window. Say so, instead of leaving six cards reading "Waiting...".
+    watchdogRef.current = setTimeout(() => {
+      if (!sawEventRef.current) {
+        localLog(
+          'No response from the scan engine after 20s. The engine never reported in. ' +
+          'This usually means another copy of SentinelVAPT is still running and holding ' +
+          'the engagement database. Close every instance and try again.',
+          'error',
+        );
+        setError(
+          'The scan engine did not respond. Close all SentinelVAPT windows ' +
+          '(check Task Manager for a stray sentinel-desktop.exe) and relaunch.',
+        );
+      }
+    }, 20_000);
+
     try {
-      const id = await api.triggerScan(target.id, runDast && isAuthorized);
+      const id = await api.triggerScan(target.id, dast);
       setScanRunId(id);
+      localLog(`Scan accepted by the engine — run id ${id}`);
     } catch (err) {
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      localLog(`Engine refused the scan: ${String(err)}`, 'error');
       setError(String(err));
       setIsRunning(false);
     }

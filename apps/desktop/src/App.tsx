@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   Shield, FolderOpen, ShieldCheck, Activity,
   AlertOctagon, FileBarChart2, ChevronRight, ListChecks,
@@ -29,6 +30,15 @@ export function App() {
   const [target, setTarget]       = useState<Target | null>(null);
   const [authRecord, setAuthRecord] = useState<AuthorizationRecord | null>(null);
   const [scanRunId, setScanRunId] = useState<string | null>(null);
+
+  // Read the version from the bundle rather than hardcoding it. A literal here
+  // went stale across two releases and reported v0.2.0 on every build, which
+  // made "which version am I actually running?" impossible to answer while
+  // diagnosing a scan that produced nothing.
+  const [version, setVersion] = useState('…');
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion('unknown'));
+  }, []);
 
   const canNav = (id: Screen): boolean => {
     if (id === 'setup') return true;
@@ -68,7 +78,7 @@ export function App() {
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>SentinelVAPT</div>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>Local Engine • Offline • v0.2.0</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>Local Engine • Offline • v{version}</div>
           </div>
         </div>
 
