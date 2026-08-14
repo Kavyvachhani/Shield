@@ -46,7 +46,9 @@ with automated renewal) and serve the full chain including any intermediate cert
 const CERT_EXPIRED: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-CERT-EXPIRED",
     title: "TLS Certificate Has Expired",
-    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+    // VA:N — an expired certificate enables interception (VC/VI) but does not make
+    // the service unavailable, so claiming availability impact overstated it.
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-298",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,
@@ -66,7 +68,10 @@ cannot recur.",
 const CERT_EXPIRING: CheckSpec = CheckSpec {
     id: "NATIVE-TLS-CERT-EXPIRING",
     title: "TLS Certificate Expires Soon",
-    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
+    // No impact metrics: the certificate is still valid. This is a maintenance
+    // warning, not a weakness, and scoring it 6.3 Medium put an operational
+    // reminder in the same band as a real finding.
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-298",
     wstg: "WSTG-CRYP-01",
     owasp_2025: OWASP_CRYPTO,

@@ -102,7 +102,10 @@ allow-list of real origins and reject anything else, including null.",
 const CORS_WILDCARD: CheckSpec = CheckSpec {
     id: "NATIVE-CORS-WILDCARD",
     title: "CORS Policy Allows All Origins",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    // AT:P — a wildcard only exposes anything if the endpoint serves non-public
+    // data without credentials, which the attacker cannot arrange. Browsers block
+    // credentialed requests under a wildcard, as the description explains.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-942",
     wstg: "WSTG-CLNT-07",
     owasp_2025: OWASP_MISCONFIG,
@@ -119,7 +122,10 @@ accepted as a risk. Otherwise restrict Access-Control-Allow-Origin to the specif
 const DANGEROUS_METHODS: CheckSpec = CheckSpec {
     id: "NATIVE-DANGEROUS-METHODS",
     title: "Unsafe HTTP Methods Advertised",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:H/VA:L/SC:N/SI:N/SA:N",
+    // AT:P — OPTIONS advertising a method does not mean the server will honour it;
+    // whether writes actually succeed is a precondition outside the attacker's
+    // control.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:H/VA:L/SC:N/SI:N/SA:N",
     cwe: "CWE-650",
     wstg: "WSTG-CONF-06",
     owasp_2025: OWASP_MISCONFIG,
@@ -139,7 +145,10 @@ enforce the method allow-list at the reverse proxy so it applies regardless of a
 const HOST_HEADER_REFLECTED: CheckSpec = CheckSpec {
     id: "NATIVE-HOST-HEADER-INJECTION",
     title: "Unvalidated Host Header Reflected in Response",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    // UI:N — cache poisoning and password-reset poisoning need no action from the
+    // victim; the poisoned entry is served to whoever browses next. UI:A
+    // understated this at 2.1.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-644",
     wstg: "WSTG-INPV-17",
     owasp_2025: OWASP_INJECTION,

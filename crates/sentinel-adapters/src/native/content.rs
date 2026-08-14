@@ -94,7 +94,10 @@ imply noopener for target=\"_blank\", but the attribute is still required for ol
 const STACK_TRACE: CheckSpec = CheckSpec {
     id: "NATIVE-STACK-TRACE",
     title: "Stack Trace or Debug Output Returned to the Client",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+    // VC:L, not VC:H — a stack trace discloses paths, versions and structure. That
+    // is partial disclosure; VC:H means total loss of confidentiality of the
+    // vulnerable system's data, which a traceback does not cause.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-209",
     wstg: "WSTG-ERRH-02",
     owasp_2025: OWASP_EXCEPTIONS,

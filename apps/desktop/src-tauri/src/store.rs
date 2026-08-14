@@ -110,6 +110,12 @@ impl Store {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("could not open database {}", path.display()))?;
+        // Without a busy timeout, a write while another process holds the lock —
+        // a second copy of the app, or one that did not exit cleanly — fails
+        // instantly with SQLITE_BUSY and the engagement silently stops
+        // persisting. Wait for the lock instead, but never indefinitely.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .context("could not set the database busy timeout")?;
         conn.execute_batch(SCHEMA).context("could not apply the database schema")?;
         Ok(Self { conn: Mutex::new(conn) })
     }

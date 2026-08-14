@@ -133,7 +133,9 @@ content is served with an accurate Content-Type from a separate origin or with C
 const REFERRER_MISSING: CheckSpec = CheckSpec {
     id: "NATIVE-REFERRER-POLICY",
     title: "Referrer-Policy Not Set or Overly Permissive",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    // UI:P — nothing leaks until a user navigates off-site and carries the
+    // referrer with them, so the disclosure is contingent on user interaction.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-200",
     wstg: "WSTG-CONF-02",
     owasp_2025: OWASP_MISCONFIG,

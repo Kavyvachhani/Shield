@@ -123,7 +123,10 @@ rate limiting and lockout, and move the console off its default path.",
 const CROSSDOMAIN_POLICY: CheckSpec = CheckSpec {
     id: "NATIVE-CROSSDOMAIN-POLICY",
     title: "Permissive Cross-Domain Policy File",
-    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    // AT:P — exploiting a crossdomain policy requires a Flash or Silverlight
+    // runtime in the victim's browser. Those are retired, so the precondition is
+    // outside the attacker's control rather than absent.
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-942",
     wstg: "WSTG-CONF-08",
     owasp_2025: OWASP_MISCONFIG,

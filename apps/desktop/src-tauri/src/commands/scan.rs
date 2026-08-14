@@ -17,6 +17,12 @@ pub struct TriggerScanInput {
 /// so it is what makes a URL-only engagement produce results at all.
 const BASELINE_STAGES: &[&str] = &["semgrep", "trivy", "gitleaks", "native"];
 
+/// How long any single stage may run before the pipeline abandons it.
+///
+/// Generous enough for a real DAST pass over a large application, short enough
+/// that a wedged scanner cannot hang the run for the rest of the session.
+const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 /// Stages added when the analyst opts into active DAST.
 const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast"];
 
@@ -93,6 +99,21 @@ pub async fn trigger_scan(
             message: "SentinelVAPT scan pipeline started".into(),
         });
 
+        // The stage-update above matches no card and writes no log line, so
+        // without this the console stays completely blank until the first stage
+        // reports — indistinguishable from a pipeline that never started.
+        let _ = app.emit(EVENT_LOG, ScanLogPayload {
+            scan_run_id: run_id_clone.clone(),
+            stage: "pipeline".into(),
+            level: "info".into(),
+            message: format!(
+                "Pipeline started for scan {} (DAST {})",
+                run_id_clone,
+                if run_dast { "enabled" } else { "disabled" }
+            ),
+            timestamp: Utc::now(),
+        });
+
         let target_record = {
             targets_clone.read().await.get(&target_id_clone).cloned()
         };
@@ -149,7 +170,26 @@ pub async fn trigger_scan(
                 timestamp: Utc::now(),
             });
 
-            let stage_result = run_stage_for(stage_name, &core_target, &config_json).await;
+            // A stage that never returns takes the whole pipeline with it: no
+            // further events are emitted, so every remaining card sits on
+            // "Waiting..." with an empty log and no way to tell a stalled scan
+            // from a slow one. An external scanner blocked on input, or a host
+            // that accepts a connection and then goes silent, both do this.
+            // Bound every stage so the run always finishes and always reports.
+            let stage_result = match tokio::time::timeout(
+                STAGE_TIMEOUT,
+                run_stage_for(stage_name, &core_target, &config_json),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "{} exceeded the {}-minute stage timeout and was abandoned; \
+                     the target may be dropping packets or the scanner may be waiting on input",
+                    engine_label(stage_name),
+                    STAGE_TIMEOUT.as_secs() / 60
+                )),
+            };
 
             match stage_result {
                 Ok(raw_findings) => {
