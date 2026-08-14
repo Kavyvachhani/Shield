@@ -9,6 +9,7 @@ use sentinel_core::models::finding::{Finding as CoreFinding, FindingStatus};
 // ── Domain models mirrored for in-process state ──────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectRecord {
     pub id: String,
     pub company_name: String,
@@ -19,6 +20,7 @@ pub struct ProjectRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetRecord {
     pub id: String,
     pub project_id: String,
@@ -32,6 +34,7 @@ pub struct TargetRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScopeDefinitionRecord {
     pub allowed_domains: Vec<String>,
     pub allowed_ips_cidrs: Vec<String>,
@@ -41,6 +44,7 @@ pub struct ScopeDefinitionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthorizationRecord {
     pub id: String,
     pub target_id: String,
@@ -61,6 +65,7 @@ pub enum ScanRunStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanRunRecord {
     pub id: String,
     pub target_id: String,
@@ -80,6 +85,7 @@ pub struct ScanRunRecord {
 /// and a lossy store would silently degrade the developer report. This struct is
 /// only the flattened shape the table view consumes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingRecord {
     pub id: String,
     pub scan_id: String,
@@ -179,6 +185,7 @@ pub struct StoredFinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportRecord {
     pub id: String,
     pub scan_id: String,

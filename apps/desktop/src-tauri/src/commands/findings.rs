@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingFilter {
     pub target_id: Option<String>,
     pub scan_id: Option<String>,
@@ -115,12 +116,14 @@ pub async fn get_finding(
 
 /// Full detail for one finding, including evidence bodies the table omits.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FindingDetail {
     pub record: FindingRecord,
     pub evidences: Vec<EvidenceView>,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvidenceView {
     pub evidence_type: String,
     pub title: String,
@@ -155,6 +158,7 @@ pub async fn get_finding_detail(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriageInput {
     pub finding_id: String,
     pub new_status: String,

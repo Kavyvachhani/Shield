@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenerateReportInput {
     pub scan_id: String,
     /// "client" | "developer" | "sarif" | "markdown" | "json"
@@ -20,6 +21,7 @@ pub struct GenerateReportInput {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenerateReportOutput {
     pub report_id: String,
     pub report_type: String,
@@ -166,6 +168,7 @@ pub async fn default_export_dir() -> Result<String, String> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportReportInput {
     pub report_id: String,
     pub export_path: String,

@@ -4,6 +4,8 @@ mod commands;
 mod state;
 mod store;
 mod event_bridge;
+#[cfg(test)]
+mod ipc_contract;
 
 use state::AppState;
 use tauri::Manager;

@@ -5,6 +5,7 @@ use chrono::Utc;
 use crate::state::{log_persist_error, AppState, AuthorizationRecord, ScopeDefinitionRecord, new_id};
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateRoEInput {
     pub target_id: String,
     pub scope: ScopeDefinitionRecord,

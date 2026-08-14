@@ -5,6 +5,7 @@ use crate::state::{log_persist_error, AppState, ScanRunRecord, ScanRunStatus, St
 use crate::event_bridge::*;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriggerScanInput {
     pub target_id: String,
     pub run_dast: bool,

@@ -4,6 +4,7 @@ use crate::state::{log_persist_error, AppState, TargetRecord, new_id};
 use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateTargetInput {
     pub project_id: String,
     pub name: String,

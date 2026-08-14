@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 
 /// Emitted every time a scan stage transitions or produces findings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanStageUpdatePayload {
     pub scan_run_id: String,
     pub stage: String,           // "semgrep" | "trivy" | "gitleaks" | "zap_dast" | "nuclei_dast"
@@ -24,6 +25,7 @@ pub struct ScanStageUpdatePayload {
 
 /// Individual log line from a running stage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanLogPayload {
     pub scan_run_id: String,
     pub stage: String,
@@ -34,6 +36,7 @@ pub struct ScanLogPayload {
 
 /// Emitted once when the full pipeline finishes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanCompletePayload {
     pub scan_run_id: String,
     pub total_findings: usize,
@@ -43,6 +46,7 @@ pub struct ScanCompletePayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StageSummary {
     pub stage: String,
     pub state: String,
@@ -52,6 +56,7 @@ pub struct StageSummary {
 
 /// Emitted if the pipeline encounters a fatal error (e.g., auth gate block).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanErrorPayload {
     pub scan_run_id: String,
     pub error: String,

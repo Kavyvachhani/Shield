@@ -49,6 +49,7 @@ impl CheckStatus {
 
 /// One row of the coverage matrix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckResult {
     pub id: String,
     pub category_code: String,
@@ -73,6 +74,7 @@ pub struct CheckResult {
 
 /// Per-category rollup for report section headers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CategorySummary {
     pub category_code: String,
     pub category: String,
@@ -85,6 +87,7 @@ pub struct CategorySummary {
 
 /// The complete coverage assessment for one scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CoverageReport {
     pub results: Vec<CheckResult>,
     pub categories: Vec<CategorySummary>,
