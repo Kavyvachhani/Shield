@@ -2,6 +2,7 @@
 
 mod commands;
 mod state;
+mod store;
 mod event_bridge;
 
 use state::AppState;
@@ -10,8 +11,16 @@ use tauri::Manager;
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // Initialize shared in-memory app state
-            app.manage(AppState::new());
+            // Open the engagement database. If it cannot be opened (read-only
+            // volume, permissions), fall back to an in-memory store so the app
+            // still runs — degraded, but usable — rather than refusing to start.
+            let path = store::Store::default_path();
+            let db = store::Store::open(&path).unwrap_or_else(|e| {
+                eprintln!("[SentinelVAPT] could not open {}: {e:#}", path.display());
+                eprintln!("[SentinelVAPT] continuing without saving — this session will not persist");
+                store::Store::in_memory().expect("in-memory store must always open")
+            });
+            app.manage(AppState::new(db));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

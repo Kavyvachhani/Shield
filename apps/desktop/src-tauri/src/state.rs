@@ -204,21 +204,52 @@ pub struct AppState {
     pub reports: Arc<RwLock<HashMap<String, ReportRecord>>>,
     /// Active scan task handles: scan_run_id → abort handle
     pub active_scans: Arc<RwLock<HashMap<String, tokio::task::AbortHandle>>>,
+    /// Durable storage. Every mutation is written through so an engagement —
+    /// above all the signed RoE — survives the app being closed.
+    pub store: Arc<crate::store::Store>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
-        Self {
-            projects: Arc::new(RwLock::new(HashMap::new())),
-            targets: Arc::new(RwLock::new(HashMap::new())),
-            auth_records: Arc::new(RwLock::new(HashMap::new())),
-            scan_runs: Arc::new(RwLock::new(HashMap::new())),
-            findings: Arc::new(RwLock::new(HashMap::new())),
-            scan_engines: Arc::new(RwLock::new(HashMap::new())),
-            reports: Arc::new(RwLock::new(HashMap::new())),
+    /// Build state backed by `store`, hydrated with everything already on disk.
+    pub fn new(store: crate::store::Store) -> Self {
+        let loaded = store.load_all().unwrap_or_else(|e| {
+            // A failed load must not stop the app opening; the analyst can still
+            // start fresh work, and nothing on disk has been destroyed.
+            tracing_warn(&format!("could not load saved engagements: {e}"));
+            crate::store::LoadedState::default()
+        });
+
+        let state = Self {
+            projects: Arc::new(RwLock::new(
+                loaded.projects.into_iter().map(|p| (p.id.clone(), p)).collect(),
+            )),
+            targets: Arc::new(RwLock::new(
+                loaded.targets.into_iter().map(|t| (t.id.clone(), t)).collect(),
+            )),
+            auth_records: Arc::new(RwLock::new(loaded.auth_records.into_iter().collect())),
+            scan_runs: Arc::new(RwLock::new(
+                loaded.scan_runs.into_iter().map(|r| (r.id.clone(), r)).collect(),
+            )),
+            findings: Arc::new(RwLock::new(loaded.findings.into_iter().collect())),
+            scan_engines: Arc::new(RwLock::new(loaded.scan_engines.into_iter().collect())),
+            reports: Arc::new(RwLock::new(
+                loaded.reports.into_iter().map(|r| (r.id.clone(), r)).collect(),
+            )),
             active_scans: Arc::new(RwLock::new(HashMap::new())),
-        }
+            store: Arc::new(store),
+        };
+        state
     }
+}
+
+/// A write failure must never lose the analyst's work silently, but it also must
+/// not crash the app mid-engagement — surface it and carry on in memory.
+pub fn log_persist_error(what: &str, e: &anyhow::Error) {
+    eprintln!("[SentinelVAPT] failed to persist {what}: {e:#}");
+}
+
+fn tracing_warn(msg: &str) {
+    eprintln!("[SentinelVAPT] {msg}");
 }
 
 pub fn new_id() -> String {

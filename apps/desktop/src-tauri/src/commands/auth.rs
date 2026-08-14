@@ -2,7 +2,7 @@ use tauri::State;
 use serde::Deserialize;
 use sha2::{Sha256, Digest};
 use chrono::Utc;
-use crate::state::{AppState, AuthorizationRecord, ScopeDefinitionRecord, new_id};
+use crate::state::{log_persist_error, AppState, AuthorizationRecord, ScopeDefinitionRecord, new_id};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRoEInput {
@@ -38,6 +38,11 @@ pub async fn create_scope_and_roe(
         roe_document_hash: roe_hash,
     };
 
+    // The signed authorisation is the record proving testing was permitted, so
+    // it is written to disk before it is acknowledged in memory.
+    if let Err(e) = state.store.save_auth_record(&input.target_id, &record) {
+        log_persist_error("the signed authorisation record", &e);
+    }
     state.auth_records.write().await
         .insert(input.target_id.clone(), record.clone());
 

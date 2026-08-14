@@ -1,4 +1,4 @@
-use crate::state::{new_id, AppState, ReportRecord};
+use crate::state::{log_persist_error, new_id, AppState, ReportRecord};
 use chrono::Utc;
 use sentinel_core::checklist::{ChecklistEngine, CoverageReport};
 use sentinel_core::models::finding::Finding;
@@ -104,6 +104,9 @@ pub async fn generate_report(
         created_at: Utc::now(),
     };
     let report_id = report.id.clone();
+    if let Err(e) = state.store.save_report(&report) {
+        log_persist_error("report", &e);
+    }
     state.reports.write().await.insert(report_id.clone(), report);
 
     Ok(GenerateReportOutput {

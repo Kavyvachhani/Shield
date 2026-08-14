@@ -1,6 +1,6 @@
 use tauri::State;
 use serde::Deserialize;
-use crate::state::{AppState, ProjectRecord, new_id};
+use crate::state::{log_persist_error, AppState, ProjectRecord, new_id};
 use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +24,9 @@ pub async fn create_project(
         name: input.name,
         created_at: Utc::now(),
     };
+    if let Err(e) = state.store.save_project(&record) {
+        log_persist_error("project", &e);
+    }
     state.projects.write().await.insert(record.id.clone(), record.clone());
     Ok(record)
 }

@@ -1,4 +1,4 @@
-use crate::state::{status_from_label, to_record, AppState, FindingRecord};
+use crate::state::{log_persist_error, status_from_label, to_record, AppState, FindingRecord};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -208,6 +208,10 @@ pub async fn triage_finding(
         Some(existing) => format!("{existing}\n{entry}"),
         None => entry,
     });
+
+    if let Err(e) = state.store.save_finding(&input.finding_id, stored) {
+        log_persist_error("triage decision", &e);
+    }
 
     Ok(to_record(&stored.finding, &stored.scan_id, stored.triage_note.clone()))
 }

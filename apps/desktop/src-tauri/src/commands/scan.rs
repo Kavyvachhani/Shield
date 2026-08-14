@@ -1,7 +1,7 @@
 use tauri::State;
 use serde::Deserialize;
 use chrono::Utc;
-use crate::state::{AppState, ScanRunRecord, ScanRunStatus, StoredFinding, new_id};
+use crate::state::{log_persist_error, AppState, ScanRunRecord, ScanRunStatus, StoredFinding, new_id};
 use crate::event_bridge::*;
 
 #[derive(Debug, Deserialize)]
@@ -47,11 +47,15 @@ pub async fn trigger_scan(
         engines_executed: Vec::new(),
         error: None,
     };
+    if let Err(e) = state.store.save_scan_run(&run_record) {
+        log_persist_error("scan run", &e);
+    }
     state.scan_runs.write().await.insert(scan_run_id.clone(), run_record);
 
     let scan_runs_clone = state.scan_runs.clone();
     let findings_clone = state.findings.clone();
     let scan_engines_clone = state.scan_engines.clone();
+    let store_clone = state.store.clone();
     let auth_records_clone = state.auth_records.clone();
     let targets_clone = state.targets.clone();
     let _active_scans_clone = state.active_scans.clone();
@@ -140,6 +144,11 @@ pub async fn trigger_scan(
                     // when it produced nothing — a clean pass is a real result.
                     engines_executed.push(engine_name(stage_name).to_string());
 
+                    // Persist the stage's findings before updating memory, so a
+                    // crash mid-pipeline still leaves completed stages on disk.
+                    if let Err(e) = store_clone.save_findings(&run_id_clone, &raw_findings) {
+                        log_persist_error("scan findings", &e);
+                    }
                     {
                         let mut store = findings_clone.write().await;
                         for f in raw_findings {
@@ -190,6 +199,9 @@ pub async fn trigger_scan(
         }
 
         let total = total_findings;
+        if let Err(e) = store_clone.save_scan_engines(&run_id_clone, &engines_executed) {
+            log_persist_error("executed engine list", &e);
+        }
         scan_engines_clone
             .write()
             .await
@@ -201,6 +213,9 @@ pub async fn trigger_scan(
                 r.completed_at = Some(Utc::now());
                 r.finding_count = total;
                 r.engines_executed = engines_executed;
+                if let Err(e) = store_clone.save_scan_run(r) {
+                    log_persist_error("completed scan run", &e);
+                }
             }
         }
 

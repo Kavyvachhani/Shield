@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "SentinelVAPT Desktop Shell"
 authors = ["SentinelVAPT Team"]
 edition = "2021"
@@ -21,6 +21,9 @@ chrono      = { workspace = true }
 uuid        = { workspace = true }
 sha2        = { workspace = true }
 tauri       = { version = "2.0.0-rc", features = ["unstable"] }
+# `bundled` compiles SQLite from source, so the installer carries no external
+# database dependency on any platform — important for the Windows build.
+rusqlite    = { version = "0.32", features = ["bundled"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

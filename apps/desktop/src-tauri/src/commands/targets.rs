@@ -1,6 +1,6 @@
 use tauri::State;
 use serde::Deserialize;
-use crate::state::{AppState, TargetRecord, new_id};
+use crate::state::{log_persist_error, AppState, TargetRecord, new_id};
 use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +33,9 @@ pub async fn create_target(
         auth_keychain_handle: None,
         created_at: Utc::now(),
     };
+    if let Err(e) = state.store.save_target(&record) {
+        log_persist_error("target", &e);
+    }
     state.targets.write().await.insert(record.id.clone(), record.clone());
     Ok(record)
 }
@@ -72,5 +75,8 @@ pub async fn update_target_repo(
     let target = map.get_mut(&target_id)
         .ok_or_else(|| format!("Target '{}' not found", target_id))?;
     target.repo_ref = Some(repo_ref);
+    if let Err(e) = state.store.save_target(target) {
+        log_persist_error("target repository path", &e);
+    }
     Ok(target.clone())
 }
