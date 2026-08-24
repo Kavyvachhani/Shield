@@ -21,7 +21,7 @@ use sentinel_core::{
     models::target::Target,
 };
 use anyhow::{anyhow, Context, Result};
-use tokio::process::Command;
+use crate::process::async_command;
 use uuid::Uuid;
 
 pub struct SemgrepAdapter;
@@ -149,7 +149,7 @@ impl ScannerAdapter for SemgrepAdapter {
         // and -l/--lang must both be specified". Since a dominant language is
         // detected for almost any real repository, this made Semgrep SAST fail
         // outright on every scan that had actual source code to look at.
-        let mut cmd = Command::new("semgrep");
+        let mut cmd = async_command("semgrep");
         cmd.arg("scan")
            .arg("--json")
            .arg("--metrics=off")

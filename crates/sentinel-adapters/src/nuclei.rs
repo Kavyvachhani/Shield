@@ -27,7 +27,7 @@ use sentinel_core::{
 };
 use anyhow::{anyhow, Context, Result};
 use std::time::Duration;
-use tokio::process::Command;
+use crate::process::async_command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
@@ -53,7 +53,7 @@ pub struct NucleiDastAdapter;
 impl NucleiDastAdapter {
     /// Run `nuclei -version` and return the version string for audit logging.
     pub async fn get_version() -> Result<String> {
-        let output = Command::new("nuclei")
+        let output = async_command("nuclei")
             .arg("-version")
             .output()
             .await
@@ -134,7 +134,7 @@ impl ScannerAdapter for NucleiDastAdapter {
         //          [-tags <tags>]           include-only filter
         //          -etags <tags>            always exclude destructive tags
         //
-        let mut cmd = Command::new("nuclei");
+        let mut cmd = async_command("nuclei");
         cmd.arg("-u").arg(target_url)
            .arg("-jsonl")
            .arg("-severity").arg(severity)

@@ -17,7 +17,7 @@ use sentinel_core::{
     parser::trivy::TrivyJsonParser,
 };
 use anyhow::{anyhow, Context, Result};
-use tokio::process::Command;
+use crate::process::async_command;
 use uuid::Uuid;
 
 pub struct TrivyAdapter;
@@ -66,7 +66,7 @@ impl ScannerAdapter for TrivyAdapter {
 
         // ── 3. Build command ─────────────────────────────────────────────────
         // trivy fs --format json --scanners vuln,secret,misconfig --severity HIGH,CRITICAL <path>
-        let mut cmd = Command::new("trivy");
+        let mut cmd = async_command("trivy");
         cmd.arg("fs")
            .arg("--format").arg("json")
            .arg("--scanners").arg(&scanners)

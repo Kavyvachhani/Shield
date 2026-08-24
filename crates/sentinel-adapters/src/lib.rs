@@ -1,4 +1,5 @@
 pub mod adapter_trait;
+pub mod process;
 pub mod runner;
 pub mod credentials;
 pub mod dast_config;

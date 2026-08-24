@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use sentinel_core::models::finding::Finding;
 use sentinel_core::models::target::Target;
 use sentinel_core::parser::gitleaks::GitleaksJsonParser;
-use tokio::process::Command;
+use crate::process::async_command;
 use uuid::Uuid;
 
 pub struct GitleaksAdapter;
@@ -53,7 +53,7 @@ impl ScannerAdapter for GitleaksAdapter {
         // `detect` reads git history; `--no-git` also covers files that were
         // never committed. Report goes to stdout so nothing is written to the
         // analyst's disk.
-        let mut cmd = Command::new("gitleaks");
+        let mut cmd = async_command("gitleaks");
         cmd.arg("detect")
             .arg("--source")
             .arg(repo_path)

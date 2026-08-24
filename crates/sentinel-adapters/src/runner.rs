@@ -8,9 +8,9 @@
 //! All three are handled explicitly so a scanner installed by any of the usual
 //! package managers is found without the user editing PATH.
 
+use crate::process::std_command;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub struct LocalCliRunner;
 
@@ -47,8 +47,15 @@ const EXTRA_SEARCH_PATHS: &[&str] = &[
 ];
 
 /// Extensions appended to a bare binary name when probing the filesystem.
+///
+/// `.ps1` is deliberately absent. `CreateProcess` — which is what spawning a
+/// command ultimately calls — does not consult file associations, so a
+/// PowerShell script cannot be launched as a program. Probing for one would
+/// make `is_installed` report an engine as available and the scan would then
+/// fail when it tried to run it. Scoop and Chocolatey both write an `.exe`
+/// shim alongside their `.ps1`, so the engine is still found by that.
 #[cfg(windows)]
-const EXECUTABLE_EXTENSIONS: &[&str] = &["", ".exe", ".cmd", ".bat", ".com", ".ps1"];
+const EXECUTABLE_EXTENSIONS: &[&str] = &["", ".exe", ".cmd", ".bat", ".com"];
 
 #[cfg(not(windows))]
 const EXECUTABLE_EXTENSIONS: &[&str] = &[""];
@@ -63,7 +70,7 @@ impl LocalCliRunner {
         let executable = Self::find_binary_path(binary_name)
             .unwrap_or_else(|| binary_name.to_string());
 
-        let output = Command::new(&executable)
+        let output = std_command(&executable)
             .args(args)
             .output()
             .with_context(|| format!(
@@ -126,7 +133,7 @@ impl LocalCliRunner {
         #[cfg(not(windows))]
         let (program, args) = ("which", vec![binary_name]);
 
-        let output = Command::new(program).args(&args).output().ok()?;
+        let output = std_command(program).args(&args).output().ok()?;
         if !output.status.success() {
             return None;
         }
@@ -247,6 +254,20 @@ mod tests {
         let expanded = LocalCliRunner::expand_path("%SENTINEL_TEST_ROOT%/bin");
         assert_eq!(expanded, PathBuf::from("/tmp/sentinel-test/bin"));
         std::env::remove_var("SENTINEL_TEST_ROOT");
+    }
+
+    /// Runs only on Windows, where the list is compiled in. An entry the OS
+    /// cannot launch would make `is_installed` promise an engine that fails
+    /// the moment a scan tries to use it.
+    #[cfg(windows)]
+    #[test]
+    fn every_probed_extension_is_something_the_os_can_actually_execute() {
+        for ext in EXECUTABLE_EXTENSIONS {
+            assert!(
+                !matches!(*ext, ".ps1" | ".py" | ".sh"),
+                "'{ext}' is a script, not an executable image; CreateProcess cannot run it"
+            );
+        }
     }
 
     #[test]
