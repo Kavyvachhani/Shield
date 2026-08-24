@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-core"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 description = "Core domain logic, authorization gate, finding schema, scoring, and reporting engine for SentinelVAPT."
 
