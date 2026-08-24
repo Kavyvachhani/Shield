@@ -21,6 +21,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// A blocking [`std::process::Command`] that shows no console window.
 pub fn std_command(program: impl AsRef<OsStr>) -> std::process::Command {
+    // Only the Windows arm mutates it; off Windows this is a plain pass-through.
+    #[allow(unused_mut)]
     let mut cmd = std::process::Command::new(program);
     #[cfg(windows)]
     {
@@ -32,6 +34,7 @@ pub fn std_command(program: impl AsRef<OsStr>) -> std::process::Command {
 
 /// An async [`tokio::process::Command`] that shows no console window.
 pub fn async_command(program: impl AsRef<OsStr>) -> tokio::process::Command {
+    #[allow(unused_mut)]
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
