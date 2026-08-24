@@ -243,7 +243,10 @@ impl AppState {
             )),
             auth_records: Arc::new(RwLock::new(loaded.auth_records.into_iter().collect())),
             scan_runs: Arc::new(RwLock::new(
-                loaded.scan_runs.into_iter().map(|r| (r.id.clone(), r)).collect(),
+                reconcile_interrupted_scans(loaded.scan_runs, &store)
+                    .into_iter()
+                    .map(|r| (r.id.clone(), r))
+                    .collect(),
             )),
             findings: Arc::new(RwLock::new(loaded.findings.into_iter().collect())),
             scan_engines: Arc::new(RwLock::new(loaded.scan_engines.into_iter().collect())),
@@ -254,6 +257,41 @@ impl AppState {
             store: Arc::new(store),
         }
     }
+}
+
+/// Close out scan runs that were still open when the app last exited.
+///
+/// A scan's status is written as `Running` when its pipeline starts and
+/// rewritten when it finishes. If the app is closed — or crashes — mid-scan,
+/// that second write never happens, so the run is reloaded as `Running` on the
+/// next launch with no task behind it. It then stays that way forever: nothing
+/// ever completes it, and the engagement shows a scan permanently in progress.
+///
+/// There is no way to resume such a run, so record it honestly as failed and
+/// say why, rather than leaving a permanent phantom in the engagement.
+fn reconcile_interrupted_scans(
+    runs: Vec<ScanRunRecord>,
+    store: &crate::store::Store,
+) -> Vec<ScanRunRecord> {
+    runs.into_iter()
+        .map(|mut r| {
+            if !matches!(r.status, ScanRunStatus::Pending | ScanRunStatus::Running) {
+                return r;
+            }
+            r.status = ScanRunStatus::Failed;
+            r.completed_at = Some(Utc::now());
+            r.error = Some(
+                "Interrupted — SentinelVAPT closed while this scan was running. \
+                 Findings from stages that completed before the exit were saved; \
+                 re-run the scan to finish the remaining stages."
+                    .to_string(),
+            );
+            if let Err(e) = store.save_scan_run(&r) {
+                log_persist_error("interrupted scan run", &e);
+            }
+            r
+        })
+        .collect()
 }
 
 /// A write failure must never lose the analyst's work silently, but it also must
@@ -268,4 +306,78 @@ fn tracing_warn(msg: &str) {
 
 pub fn new_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+
+    fn run(id: &str, status: ScanRunStatus) -> ScanRunRecord {
+        ScanRunRecord {
+            id: id.into(),
+            target_id: "t1".into(),
+            status,
+            run_dast: false,
+            started_at: Utc::now(),
+            completed_at: None,
+            finding_count: 0,
+            engines_executed: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// A scan that was in flight when the app closed has no task behind it on
+    /// the next launch, so leaving it `Running` leaves a phantom scan in the
+    /// engagement that can never finish.
+    #[test]
+    fn an_in_flight_scan_is_closed_out_on_the_next_launch() {
+        let store = crate::store::Store::in_memory().unwrap();
+        let out = reconcile_interrupted_scans(
+            vec![run("a", ScanRunStatus::Running), run("b", ScanRunStatus::Pending)],
+            &store,
+        );
+
+        for r in &out {
+            assert_eq!(r.status, ScanRunStatus::Failed, "run {} still open", r.id);
+            assert!(r.completed_at.is_some(), "run {} has no end time", r.id);
+            assert!(
+                r.error.as_deref().unwrap_or_default().contains("Interrupted"),
+                "run {} does not say why it ended: {:?}",
+                r.id,
+                r.error
+            );
+        }
+    }
+
+    /// Reconciliation must be a write-through, or the same phantom reappears
+    /// on every subsequent launch.
+    #[test]
+    fn the_closed_out_status_is_persisted_not_just_patched_in_memory() {
+        let store = crate::store::Store::in_memory().unwrap();
+        store.save_scan_run(&run("a", ScanRunStatus::Running)).unwrap();
+
+        let _ = reconcile_interrupted_scans(vec![run("a", ScanRunStatus::Running)], &store);
+
+        let reloaded = store.load_all().unwrap();
+        let a = reloaded.scan_runs.iter().find(|r| r.id == "a").expect("run a");
+        assert_eq!(a.status, ScanRunStatus::Failed, "the fix did not reach disk");
+    }
+
+    /// Finished runs are history and must be left exactly as they are.
+    #[test]
+    fn settled_runs_are_left_untouched() {
+        let store = crate::store::Store::in_memory().unwrap();
+        let out = reconcile_interrupted_scans(
+            vec![
+                run("done", ScanRunStatus::Completed),
+                run("failed", ScanRunStatus::Failed),
+                run("cancelled", ScanRunStatus::Cancelled),
+            ],
+            &store,
+        );
+        assert_eq!(out[0].status, ScanRunStatus::Completed);
+        assert_eq!(out[1].status, ScanRunStatus::Failed);
+        assert_eq!(out[2].status, ScanRunStatus::Cancelled);
+        assert!(out.iter().all(|r| r.error.is_none()), "history was rewritten");
+    }
 }

@@ -264,6 +264,8 @@ export interface ScanStageUpdatePayload {
   state: StageState | 'running';
   stageFindings: number;
   totalFindings: number;
+  /** Cumulative Critical + High findings so far. */
+  criticalHigh: number;
   timestamp: string;
   message: string;
 }
@@ -279,6 +281,7 @@ export interface ScanLogPayload {
 export interface ScanCompletePayload {
   scanRunId: string;
   totalFindings: number;
+  criticalHigh: number;
   stageSummary: Array<{ stage: string; state: string; findings: number; error?: string }>;
   durationSeconds: number;
   completedAt: string;

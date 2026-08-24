@@ -15,21 +15,66 @@ pub struct CreateTargetInput {
     pub stack_description: Option<String>,
 }
 
+/// Validate and normalize a target base URL.
+///
+/// A `starts_with("https://")` check is not validation: it accepts `https://`
+/// with nothing after it, and it passes through malformed-but-parseable input
+/// such as `https:///dev.example.com` verbatim. That second form does resolve
+/// correctly — the URL spec ignores extra slashes after a special scheme — but
+/// storing it as typed puts a triple slash into the scan console, the scope
+/// banner and the client report, where it reads like a broken target and sends
+/// anyone debugging a scan chasing the wrong thing.
+///
+/// Parse the URL properly, reject what has no host, and store the canonical
+/// form so everything downstream displays one unambiguous URL.
+fn validate_base_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Target base URL is required.".into());
+    }
+
+    let parsed = url::Url::parse(trimmed).map_err(|e| {
+        format!("Target base URL '{trimmed}' is not a valid URL: {e}. Expected something like https://app.example.com")
+    })?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "Target base URL must use http or https, not '{other}'."
+            ))
+        }
+    }
+
+    // `Url::parse` already rejects an empty authority for http/https, but a
+    // host that parses to nothing would leave every probe pointed at no host
+    // at all, so refuse it explicitly rather than relying on that.
+    if parsed.host_str().unwrap_or_default().is_empty() {
+        return Err(format!("Target base URL '{trimmed}' has no host."));
+    }
+
+    // Canonical form, minus the bare trailing slash `Url` always adds to an
+    // empty path — adapters append their own path separator, and a target
+    // shown as `https://example.com` is what the analyst actually typed.
+    let mut normalized = parsed.to_string();
+    if parsed.path() == "/" && parsed.query().is_none() && parsed.fragment().is_none() {
+        normalized.truncate(normalized.len() - 1);
+    }
+    Ok(normalized)
+}
+
 #[tauri::command]
 pub async fn create_target(
     input: CreateTargetInput,
     state: State<'_, AppState>,
 ) -> Result<TargetRecord, String> {
-    // Validate base_url is a well-formed URL
-    if !input.base_url.starts_with("http://") && !input.base_url.starts_with("https://") {
-        return Err("Target base URL must begin with http:// or https://".into());
-    }
+    let base_url = validate_base_url(&input.base_url)?;
     let record = TargetRecord {
         id: new_id(),
         project_id: input.project_id,
         name: input.name,
         target_type: input.target_type,
-        base_url: input.base_url,
+        base_url,
         repo_ref: input.repo_ref,
         stack_description: input.stack_description,
         auth_keychain_handle: None,
@@ -193,5 +238,63 @@ pub async fn get_target_credential_status(
         }),
         Ok(None) => Ok(CredentialStatus { configured: false, description: None }),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::validate_base_url;
+
+    #[test]
+    fn accepts_ordinary_targets_without_mangling_them() {
+        for (input, expected) in [
+            ("https://dev.industrility.com", "https://dev.industrility.com"),
+            ("https://dev.industrility.com/", "https://dev.industrility.com"),
+            ("http://localhost:8080", "http://localhost:8080"),
+            ("https://10.0.0.5:8443/app", "https://10.0.0.5:8443/app"),
+        ] {
+            assert_eq!(validate_base_url(input).unwrap(), expected, "input {input}");
+        }
+    }
+
+    /// The stray slash seen in a real engagement log. It resolves to the right
+    /// host, so it must not be rejected — but it is normalized so it stops
+    /// showing up as `https:///host` in the console and the client report.
+    #[test]
+    fn normalizes_a_stray_slash_after_the_scheme() {
+        assert_eq!(
+            validate_base_url("https:///dev.industrility.com").unwrap(),
+            "https://dev.industrility.com"
+        );
+    }
+
+    #[test]
+    fn rejects_non_http_schemes_and_junk() {
+        for url in [
+            "ftp://example.com",
+            "file:///etc/passwd",
+            "example.com",
+            "https://",
+            "",
+        ] {
+            assert!(validate_base_url(url).is_err(), "should reject {url}");
+        }
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert_eq!(
+            validate_base_url("  https://example.com  ").unwrap(),
+            "https://example.com"
+        );
+    }
+
+    /// Paths, queries and fragments are part of the target and must survive.
+    #[test]
+    fn preserves_path_and_query() {
+        assert_eq!(
+            validate_base_url("https://example.com/api/v2?tenant=acme").unwrap(),
+            "https://example.com/api/v2?tenant=acme"
+        );
     }
 }

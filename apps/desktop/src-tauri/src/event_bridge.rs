@@ -19,6 +19,11 @@ pub struct ScanStageUpdatePayload {
     pub state: String,           // "pending" | "running" | "done" | "skipped" | "failed"
     pub stage_findings: usize,   // findings from this stage only
     pub total_findings: usize,   // cumulative total across all stages so far
+    /// Cumulative Critical + High findings so far. The console shows this
+    /// beside the total; it used to be hardcoded to zero in the UI, which
+    /// read as "nothing serious found" on every scan regardless of what the
+    /// scan actually found.
+    pub critical_high: usize,
     pub timestamp: DateTime<Utc>,
     pub message: String,
 }
@@ -40,6 +45,7 @@ pub struct ScanLogPayload {
 pub struct ScanCompletePayload {
     pub scan_run_id: String,
     pub total_findings: usize,
+    pub critical_high: usize,
     pub stage_summary: Vec<StageSummary>,
     pub duration_seconds: u64,
     pub completed_at: DateTime<Utc>,

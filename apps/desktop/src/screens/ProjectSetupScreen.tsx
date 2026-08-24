@@ -16,6 +16,23 @@ const TARGET_ICONS = {
   'Mobile API': Cpu,
 };
 
+/// Returns a human-readable problem with `raw`, or null if it is usable as a
+/// target base URL. Mirrors `validate_base_url` in commands/targets.rs.
+function describeBaseUrlProblem(raw: string): string | null {
+  if (!raw) return 'Base URL is required.';
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return `'${raw}' is not a valid URL. Expected something like https://app.example.com`;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `Base URL must use http or https, not '${parsed.protocol.replace(':', '')}'.`;
+  }
+  if (!parsed.hostname) return `'${raw}' has no host.`;
+  return null;
+}
+
 export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
   const [project, setProject] = useState<Project | null>(null);
@@ -69,9 +86,11 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
     if (!targetName.trim() || !baseUrl.trim()) {
       setError('Target name and base URL are required.'); return;
     }
-    if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
-      setError('Base URL must start with http:// or https://'); return;
-    }
+    // `startsWith('https://')` is not validation — it accepts `https://` with
+    // no host at all. Parse it, and let the backend's validator (which also
+    // canonicalizes) have the final say.
+    const urlError = describeBaseUrlProblem(baseUrl.trim());
+    if (urlError) { setError(urlError); return; }
     setSaving(true);
     try {
       const input: CreateTargetInput = {

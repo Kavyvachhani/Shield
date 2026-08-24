@@ -26,6 +26,49 @@ const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 6
 /// Stages added when the analyst opts into active DAST.
 const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast"];
 
+/// Running totals a pipeline accumulates as its stages report.
+///
+/// These used to be loose `&mut` parameters threaded through
+/// `process_stage_result`, which was already one argument over clippy's limit
+/// before Critical/High counts and the per-stage summary needed adding too.
+#[derive(Default)]
+struct PipelineTally {
+    total_findings: usize,
+    /// Cumulative Critical + High. The scan console displays this; it was
+    /// previously a hardcoded `0` in the UI.
+    critical_high: usize,
+    /// Engines that genuinely ran. Drives coverage reporting, so a skipped
+    /// stage must never appear here.
+    engines_executed: Vec<String>,
+    /// One entry per stage, in completion order. Ships in the completion
+    /// event, which used to send an empty vector on every scan.
+    stage_summary: Vec<StageSummary>,
+}
+
+impl PipelineTally {
+    /// Fold one stage's successful result into the running totals.
+    fn record_stage_findings(
+        &mut self,
+        stage_name: &str,
+        findings: &[sentinel_core::models::finding::Finding],
+    ) {
+        use sentinel_core::models::finding::Severity;
+
+        self.engines_executed.push(engine_name(stage_name).to_string());
+        self.total_findings += findings.len();
+        self.critical_high += findings
+            .iter()
+            .filter(|f| matches!(f.severity, Severity::Critical | Severity::High))
+            .count();
+        self.stage_summary.push(StageSummary {
+            stage: stage_name.to_string(),
+            state: "done".into(),
+            findings: findings.len(),
+            error: None,
+        });
+    }
+}
+
 /// Trigger the full ScanOrchestrator pipeline for a target.
 ///
 /// SAFETY: If `run_dast = true`, the command layer checks for a signed
@@ -73,14 +116,19 @@ pub async fn trigger_scan(
     let store_clone = state.store.clone();
     let auth_records_clone = state.auth_records.clone();
     let targets_clone = state.targets.clone();
-    let _active_scans_clone = state.active_scans.clone();
     let config_json = input.config_json.unwrap_or_default();
     let run_dast = input.run_dast;
     let run_id_clone = scan_run_id.clone();
     let target_id_clone = target_id.clone();
 
+    // The pipeline task takes ownership of `app`; the supervisor below needs
+    // its own handle to report a crash after that task is gone.
+    let supervisor_app = app.clone();
+
     let join_handle = tokio::spawn(async move {
         use tauri::Emitter;
+
+        let started_at = std::time::Instant::now();
 
         {
             let mut runs = scan_runs_clone.write().await;
@@ -95,6 +143,7 @@ pub async fn trigger_scan(
             state: "running".into(),
             stage_findings: 0,
             total_findings: 0,
+            critical_high: 0,
             timestamp: Utc::now(),
             message: "SentinelVAPT scan pipeline started".into(),
         });
@@ -148,8 +197,7 @@ pub async fn trigger_scan(
             .chain(if run_dast { DAST_STAGES } else { &[] })
             .copied()
             .collect();
-        let mut total_findings = 0usize;
-        let mut engines_executed: Vec<String> = Vec::new();
+        let mut tally = PipelineTally::default();
 
         // Semgrep, Trivy and Gitleaks are three independent local file
         // analyzers: none of them touches the network or shares state with
@@ -164,7 +212,7 @@ pub async fn trigger_scan(
         debug_assert_eq!(&stages[..3], &["semgrep", "trivy", "gitleaks"]);
 
         for (idx, stage_name) in stages[..3].iter().enumerate() {
-            emit_stage_starting(&app, &run_id_clone, stage_name, idx, total_findings);
+            emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
         }
         let (semgrep_result, trivy_result, gitleaks_result) = tokio::join!(
             run_stage_bounded("semgrep", &core_target, &config_json),
@@ -178,13 +226,13 @@ pub async fn trigger_scan(
         ] {
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
-                stage_name, result, &mut total_findings, &mut engines_executed,
+                stage_name, result, &mut tally,
             ).await;
         }
 
         for (offset, stage_name) in stages[3..].iter().enumerate() {
             let idx = offset + 3;
-            emit_stage_starting(&app, &run_id_clone, stage_name, idx, total_findings);
+            emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
 
             // A stage that never returns takes the whole pipeline with it: no
             // further events are emitted, so every remaining card sits on
@@ -196,25 +244,25 @@ pub async fn trigger_scan(
 
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
-                stage_name, stage_result, &mut total_findings, &mut engines_executed,
+                stage_name, stage_result, &mut tally,
             ).await;
         }
 
-        let total = total_findings;
-        if let Err(e) = store_clone.save_scan_engines(&run_id_clone, &engines_executed) {
+        let total = tally.total_findings;
+        if let Err(e) = store_clone.save_scan_engines(&run_id_clone, &tally.engines_executed) {
             log_persist_error("executed engine list", &e);
         }
         scan_engines_clone
             .write()
             .await
-            .insert(run_id_clone.clone(), engines_executed.clone());
+            .insert(run_id_clone.clone(), tally.engines_executed.clone());
         {
             let mut runs = scan_runs_clone.write().await;
             if let Some(r) = runs.get_mut(&run_id_clone) {
                 r.status = ScanRunStatus::Completed;
                 r.completed_at = Some(Utc::now());
                 r.finding_count = total;
-                r.engines_executed = engines_executed;
+                r.engines_executed = std::mem::take(&mut tally.engines_executed);
                 if let Err(e) = store_clone.save_scan_run(r) {
                     log_persist_error("completed scan run", &e);
                 }
@@ -224,8 +272,13 @@ pub async fn trigger_scan(
         let _ = app.emit(EVENT_COMPLETE, ScanCompletePayload {
             scan_run_id: run_id_clone.clone(),
             total_findings: total,
-            stage_summary: vec![],
-            duration_seconds: 0,
+            critical_high: tally.critical_high,
+            // These two shipped as `vec![]` and `0` on every scan since the
+            // event was introduced: the payload declared a per-stage breakdown
+            // and a duration, and always asserted the scan found nothing in no
+            // time at all.
+            stage_summary: std::mem::take(&mut tally.stage_summary),
+            duration_seconds: started_at.elapsed().as_secs(),
             completed_at: Utc::now(),
         });
     });
@@ -233,7 +286,99 @@ pub async fn trigger_scan(
     state.active_scans.write().await
         .insert(scan_run_id.clone(), join_handle.abort_handle());
 
+    // Supervise the pipeline task.
+    //
+    // The pipeline emits its own completion event on every path it can return
+    // from — but a panic is not one of those paths. An adapter that indexes out
+    // of bounds or unwraps a None takes the whole task down between its
+    // "starting" event and its completion event, so the console keeps a stage
+    // spinning and `isRunning` true forever: the 20s watchdog cannot help,
+    // because events *did* arrive before the crash. Nothing ever tells the
+    // analyst the scan is dead.
+    //
+    // Awaiting the join handle turns that silence into a reported failure, and
+    // gives the run's registration in `active_scans` a single place to be
+    // removed — it previously leaked an entry per scan for the session's life,
+    // and `cancel_scan` on a finished run aborted an already-dead task.
+    tokio::spawn({
+        let scan_runs = state.scan_runs.clone();
+        let store = state.store.clone();
+        let active_scans = state.active_scans.clone();
+        let run_id = scan_run_id.clone();
+        async move {
+            use tauri::Emitter;
+
+            let outcome = join_handle.await;
+            active_scans.write().await.remove(&run_id);
+
+            let Err(join_err) = outcome else {
+                return; // Ran to completion and reported itself.
+            };
+
+            // A cancelled task is `cancel_scan` doing its job; that command
+            // already recorded the status and told the UI.
+            if join_err.is_cancelled() {
+                return;
+            }
+
+            let err = mark_run_crashed(&scan_runs, &store, &run_id, panic_detail(join_err)).await;
+
+            let _ = supervisor_app.emit(EVENT_ERROR, ScanErrorPayload {
+                scan_run_id: run_id,
+                error: err,
+                stage: None,
+                timestamp: Utc::now(),
+            });
+        }
+    });
+
     Ok(scan_run_id)
+}
+
+/// Record a crashed pipeline against its run and return the message to report.
+///
+/// Split out from the supervisor so the state transition can be tested without
+/// standing up a Tauri app: the supervisor adds only the event emit on top.
+async fn mark_run_crashed(
+    scan_runs: &tokio::sync::RwLock<std::collections::HashMap<String, ScanRunRecord>>,
+    store: &crate::store::Store,
+    run_id: &str,
+    detail: String,
+) -> String {
+    let err = format!(
+        "The scan pipeline crashed and was stopped: {detail}. \
+         Findings from stages that finished before the crash have been saved."
+    );
+
+    let mut runs = scan_runs.write().await;
+    if let Some(r) = runs.get_mut(run_id) {
+        r.status = ScanRunStatus::Failed;
+        r.error = Some(err.clone());
+        r.completed_at = Some(Utc::now());
+        if let Err(e) = store.save_scan_run(r) {
+            log_persist_error("crashed scan run", &e);
+        }
+    }
+    err
+}
+
+/// Best-effort description of what a panicking task panicked with.
+///
+/// `JoinError` prints only "task N panicked"; the message itself lives in the
+/// boxed payload, and it is the only clue the analyst gets about which stage
+/// broke.
+fn panic_detail(join_err: tokio::task::JoinError) -> String {
+    if !join_err.is_panic() {
+        return join_err.to_string();
+    }
+    let payload = join_err.into_panic();
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panicked with a non-string payload".to_string()
+    }
 }
 
 #[tauri::command]
@@ -247,6 +392,12 @@ pub async fn cancel_scan(
     if let Some(run) = state.scan_runs.write().await.get_mut(&scan_run_id) {
         run.status = ScanRunStatus::Cancelled;
         run.completed_at = Some(Utc::now());
+        // The in-memory record was updated but never written through, so a
+        // cancelled scan came back from disk as Pending or Running on the next
+        // launch — permanently, with no task behind it to ever finish it.
+        if let Err(e) = state.store.save_scan_run(run) {
+            log_persist_error("cancelled scan run", &e);
+        }
     }
     Ok(())
 }
@@ -339,7 +490,7 @@ fn emit_stage_starting(
     run_id: &str,
     stage_name: &str,
     idx: usize,
-    total_findings: usize,
+    tally: &PipelineTally,
 ) {
     use tauri::Emitter;
     let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
@@ -347,7 +498,8 @@ fn emit_stage_starting(
         stage: stage_name.to_string(),
         state: "running".into(),
         stage_findings: 0,
-        total_findings,
+        total_findings: tally.total_findings,
+        critical_high: tally.critical_high,
         timestamp: Utc::now(),
         message: format!("Starting {} scan...", engine_label(stage_name)),
     });
@@ -371,8 +523,7 @@ async fn process_stage_result(
     run_id: &str,
     stage_name: &str,
     result: anyhow::Result<Vec<sentinel_core::models::finding::Finding>>,
-    total_findings: &mut usize,
-    engines_executed: &mut Vec<String>,
+    tally: &mut PipelineTally,
 ) {
     use tauri::Emitter;
 
@@ -381,7 +532,7 @@ async fn process_stage_result(
             let stage_finding_count = raw_findings.len();
             // The stage completed, so its engine counts as coverage even
             // when it produced nothing — a clean pass is a real result.
-            engines_executed.push(engine_name(stage_name).to_string());
+            tally.record_stage_findings(stage_name, &raw_findings);
 
             // Persist the stage's findings before updating memory, so a
             // crash mid-pipeline still leaves completed stages on disk.
@@ -401,14 +552,13 @@ async fn process_stage_result(
                     );
                 }
             }
-            *total_findings += stage_finding_count;
-
             let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
                 scan_run_id: run_id.to_string(),
                 stage: stage_name.to_string(),
                 state: "done".into(),
                 stage_findings: stage_finding_count,
-                total_findings: *total_findings,
+                total_findings: tally.total_findings,
+                critical_high: tally.critical_high,
                 timestamp: Utc::now(),
                 message: format!("{} complete: {} findings", engine_label(stage_name), stage_finding_count),
             });
@@ -422,12 +572,19 @@ async fn process_stage_result(
             // state the analyst can act on.
             let is_skip = is_skip_message(&msg);
             let stage_state = if is_skip { "skipped" } else { "failed" };
+            tally.stage_summary.push(StageSummary {
+                stage: stage_name.to_string(),
+                state: stage_state.into(),
+                findings: 0,
+                error: Some(msg.clone()),
+            });
             let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
                 scan_run_id: run_id.to_string(),
                 stage: stage_name.to_string(),
                 state: stage_state.into(),
                 stage_findings: 0,
-                total_findings: *total_findings,
+                total_findings: tally.total_findings,
+                critical_high: tally.critical_high,
                 timestamp: Utc::now(),
                 message: msg.clone(),
             });
@@ -487,6 +644,151 @@ fn engine_label(stage: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A panicking stage takes the whole pipeline task down between its
+    /// "starting" and "complete" events. Before the supervisor existed nothing
+    /// noticed: no completion event, no error event, the console kept a stage
+    /// spinning forever, and the 20s watchdog could not help because events
+    /// *had* arrived before the crash.
+    #[tokio::test]
+    async fn a_panicking_pipeline_is_recorded_as_a_failed_run() {
+        use std::collections::HashMap;
+        use tokio::sync::RwLock;
+
+        let store = crate::store::Store::in_memory().unwrap();
+        let record = ScanRunRecord {
+            id: "run-1".into(),
+            target_id: "t1".into(),
+            status: ScanRunStatus::Running,
+            run_dast: false,
+            started_at: Utc::now(),
+            completed_at: None,
+            finding_count: 0,
+            engines_executed: Vec::new(),
+            error: None,
+        };
+        store.save_scan_run(&record).unwrap();
+        let runs = RwLock::new(HashMap::from([("run-1".to_string(), record)]));
+
+        // Exactly how the supervisor obtains its detail string.
+        let handle = tokio::spawn(async { panic!("adapter indexed out of bounds") });
+        let join_err = handle.await.expect_err("task must have panicked");
+        let reported = mark_run_crashed(&runs, &store, "run-1", panic_detail(join_err)).await;
+
+        assert!(
+            reported.contains("adapter indexed out of bounds"),
+            "the report does not say what broke: {reported}"
+        );
+
+        let stored = runs.read().await;
+        let r = stored.get("run-1").unwrap();
+        assert_eq!(r.status, ScanRunStatus::Failed);
+        assert!(r.completed_at.is_some(), "a crashed run never ended");
+
+        // And it must survive a restart, or the run reappears as Running.
+        let reloaded = store.load_all().unwrap();
+        let persisted = reloaded.scan_runs.iter().find(|r| r.id == "run-1").unwrap();
+        assert_eq!(persisted.status, ScanRunStatus::Failed, "the crash never reached disk");
+    }
+
+    /// `JoinError` renders only "task N panicked" — the message the analyst
+    /// needs is in the boxed payload, and both panic payload shapes occur.
+    #[tokio::test]
+    async fn panic_detail_recovers_both_payload_shapes() {
+        let literal = tokio::spawn(async { panic!("a static message") })
+            .await
+            .expect_err("must panic");
+        assert_eq!(panic_detail(literal), "a static message");
+
+        let owned = tokio::spawn(async { panic!("{}", format!("stage {} died", 3)) })
+            .await
+            .expect_err("must panic");
+        assert_eq!(panic_detail(owned), "stage 3 died");
+    }
+
+    /// Cancellation is `cancel_scan` doing its job and is already recorded by
+    /// that command; the supervisor must not overwrite it with a crash report.
+    #[tokio::test]
+    async fn a_cancelled_task_is_not_a_crash() {
+        let handle = tokio::spawn(async {
+            futures_sleep().await;
+        });
+        handle.abort();
+        let join_err = handle.await.expect_err("must be cancelled");
+        assert!(join_err.is_cancelled(), "abort must surface as cancellation");
+        assert!(!join_err.is_panic(), "a cancellation must never look like a panic");
+    }
+
+    async fn futures_sleep() {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+
+    /// The tally is what the completion event and the console pills report.
+    /// Critical and High must accumulate across stages, and nothing below High
+    /// may leak into that count.
+    #[test]
+    fn the_tally_accumulates_totals_and_counts_only_critical_and_high() {
+        use sentinel_core::models::finding::Severity;
+
+        let mut tally = PipelineTally::default();
+        tally.record_stage_findings(
+            "native",
+            &[
+                finding(Severity::Critical),
+                finding(Severity::High),
+                finding(Severity::Medium),
+                finding(Severity::Low),
+                finding(Severity::Info),
+            ],
+        );
+        tally.record_stage_findings("semgrep", &[finding(Severity::High)]);
+        // A clean pass still counts as coverage and still gets a summary row.
+        tally.record_stage_findings("trivy", &[]);
+
+        assert_eq!(tally.total_findings, 6);
+        assert_eq!(tally.critical_high, 3, "Medium/Low/Info must not be counted");
+        assert_eq!(
+            tally.engines_executed,
+            vec!["Sentinel Native", "Semgrep", "Trivy"],
+            "a stage that ran clean is still coverage"
+        );
+        assert_eq!(tally.stage_summary.len(), 3, "every stage needs a summary row");
+        assert_eq!(tally.stage_summary[2].findings, 0);
+        assert!(tally.stage_summary.iter().all(|s| s.error.is_none()));
+    }
+
+    /// Minimal finding at a given severity — only `severity` matters here.
+    fn finding(severity: sentinel_core::models::finding::Severity) -> sentinel_core::models::finding::Finding {
+        use sentinel_core::models::finding::{Finding, FindingStatus};
+        Finding {
+            id: uuid::Uuid::new_v4(),
+            scan_id: uuid::Uuid::new_v4(),
+            target_id: uuid::Uuid::new_v4(),
+            title: "t".into(),
+            description: "d".into(),
+            severity,
+            cvss4: None,
+            epss: None,
+            kev_listed: false,
+            asset_exposure_factor: 1.0,
+            reachability_score: 1.0,
+            priority_score: 1.0,
+            cwe_id: None,
+            owasp_2025: None,
+            wstg_id: None,
+            api_top10: None,
+            affected_component: "c".into(),
+            evidences: vec![],
+            repro_steps: vec![],
+            remediation: "r".into(),
+            references: vec![],
+            status: FindingStatus::Open,
+            source_tools: vec![],
+            ai_triage: None,
+            priority_rationale: "p".into(),
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn every_stage_maps_to_a_catalog_engine_name() {

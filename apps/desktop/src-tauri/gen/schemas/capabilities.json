@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Permissions the SentinelVAPT workbench window needs. Without a capability file Tauri v2 grants the webview nothing, so every core-plugin call from the frontend is denied by the ACL — including event.listen, which is how the scan console receives stage, log, complete and error events from the engine. Application commands declared in generate_handler! are not ACL-gated, which is why a scan could still be accepted while none of its progress ever arrived.","local":true,"windows":["main"],"permissions":["core:default"]}}

@@ -24,6 +24,14 @@ tauri       = { version = "2.0.0-rc", features = ["unstable"] }
 # `bundled` compiles SQLite from source, so the installer carries no external
 # database dependency on any platform — important for the Windows build.
 rusqlite    = { version = "0.32", features = ["bundled"] }
+# Used to validate a target base URL properly: `starts_with("https://")` accepts
+# `https:///host`, which has no host at all and cannot be scanned.
+url         = "2.5"
+
+[dev-dependencies]
+# `test` provides the mock runtime used to assert the resolved ACL actually
+# permits event.listen for the main window — see src/acl_contract.rs.
+tauri       = { version = "2.0.0-rc", features = ["test"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

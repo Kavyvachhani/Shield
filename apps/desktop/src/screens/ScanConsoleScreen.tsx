@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield } from 'lucide-react';
 import type { Target, AuthorizationRecord, ScanLogPayload } from '../types';
 import { api, events } from '../lib/tauri';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 
 interface Props {
   target: Target;
@@ -34,6 +35,11 @@ const STAGE_DEFS: StageStatus[] = [
   { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
 ];
 
+// How long to wait for the first engine event before warning. The pipeline
+// emits its first log line immediately on spawn, so silence past this point
+// means the events are not arriving rather than that a stage is slow.
+const WATCHDOG_SECONDS = 20;
+
 const STAGE_TAG: Record<StageStatus['stageType'], string> = {
   static:  '🔍 STATIC',
   builtin: '🛡 BUILT-IN',
@@ -55,7 +61,15 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   const [isRunning, setIsRunning] = useState(false);
   const [runDast, setRunDast] = useState(false);
   const [totalFindings, setTotalFindings] = useState(0);
+  // Reported by the engine alongside the total. This was rendered as a literal
+  // `0` regardless of what the scan found, so a run that turned up criticals
+  // still displayed "0 Critical+High" beside a non-zero total.
+  const [criticalHigh, setCriticalHigh] = useState(0);
   const [error, setError] = useState('');
+  // False until all four engine event subscriptions are live. A scan launched
+  // without them would run to completion in the backend while this console
+  // showed nothing, so the launch button stays disabled until they are up.
+  const [listenersReady, setListenersReady] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   // Tracks whether any backend event has arrived for the current run, so a
   // pipeline that never reports in can be told apart from one that is simply
@@ -66,6 +80,9 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   // closes over a stale `onScanComplete` without having to re-run itself.
   const onScanCompleteRef = useRef(onScanComplete);
   onScanCompleteRef.current = onScanComplete;
+  // Same reason: the mount-once listener effect writes a summary line when a
+  // scan completes, and must not capture a stale closure to do it.
+  const localLogRef = useRef<(m: string, l?: 'info' | 'warn' | 'error') => void>(() => {});
 
   const isAuthorized = !!authRecord;
 
@@ -77,53 +94,88 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       { scanRunId: '', stage: 'console', level, message, timestamp: new Date().toISOString() },
     ]);
   }
+  localLogRef.current = localLog;
 
   // Subscribe to Tauri scan events exactly once per mount. This used to
   // depend on `[onScanComplete]`, a callback App.tsx recreates on every
   // render — if App re-rendered while a scan was in flight, this effect tore
-  // down and re-registered all four listeners. Because `listen()` resolves
-  // asynchronously, a cleanup that ran before a registration's promise
-  // settled orphaned that listener (it kept firing but nothing could ever
-  // remove it), while the new effect run added a duplicate on top of it,
-  // producing duplicated log lines and, worse, a window in which a scan
-  // event could be dropped between the old subscription tearing down and the
-  // new one attaching. Registering once and reading the callback through a
-  // ref removes the churn entirely.
+  // down and re-registered all four listeners. Registering once and reading
+  // the callback through a ref removes that churn entirely.
+  //
+  // Registration is also awaited as a unit and its failure is surfaced.
+  // `listen()` is a core-plugin call, so it goes through Tauri's ACL and
+  // rejects outright when the window holds no capability granting
+  // `core:event:allow-listen`. The old code registered with a bare
+  // `.then(u => unlisteners.push(u))`: a rejection there is an unhandled
+  // promise nobody sees, so the console simply never received a single event
+  // and blamed the silence on a stray second instance twenty seconds later.
+  // A subscription that cannot be established is a hard failure and now says
+  // so immediately, before any scan is launched.
   useEffect(() => {
-    const unlisteners: (() => void)[] = [];
+    let cancelled = false;
+    let unlisteners: UnlistenFn[] = [];
 
-    events.onStageUpdate((p) => {
-      sawEventRef.current = true;
-      const stage = p.stage as ScanStage;
-      setTotalFindings(p.totalFindings);
-      setStages(prev => prev.map(s =>
-        s.stage === stage ? { ...s, state: p.state as StageState, findings: p.stageFindings, message: p.message } : s
-      ));
-    }).then(u => unlisteners.push(u));
+    // `listen()` resolves asynchronously, so a cleanup that runs before these
+    // promises settle would otherwise orphan every listener it could not yet
+    // see. Collecting them in one `Promise.all` and honouring `cancelled`
+    // guarantees each one is either stored for teardown or torn down here.
+    (async () => {
+      try {
+        const registered = await Promise.all([
+          events.onStageUpdate((p) => {
+            sawEventRef.current = true;
+            const stage = p.stage as ScanStage;
+            setTotalFindings(p.totalFindings);
+            setCriticalHigh(p.criticalHigh);
+            setStages(prev => prev.map(s =>
+              s.stage === stage ? { ...s, state: p.state as StageState, findings: p.stageFindings, message: p.message } : s
+            ));
+          }),
+          events.onLog((p) => {
+            sawEventRef.current = true;
+            setLogs(prev => [...prev.slice(-199), p]);
+            setTimeout(() => { logRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, 50);
+          }),
+          events.onComplete((p) => {
+            sawEventRef.current = true;
+            if (watchdogRef.current) clearTimeout(watchdogRef.current);
+            setIsRunning(false);
+            setScanRunId(p.scanRunId);
+            setTotalFindings(p.totalFindings);
+            setCriticalHigh(p.criticalHigh);
+            localLogRef.current(
+              `Scan finished in ${p.durationSeconds}s — ${p.totalFindings} finding` +
+              `${p.totalFindings === 1 ? '' : 's'}, ${p.criticalHigh} Critical/High.`,
+            );
+            onScanCompleteRef.current(p.scanRunId);
+          }),
+          events.onError((p) => {
+            sawEventRef.current = true;
+            if (watchdogRef.current) clearTimeout(watchdogRef.current);
+            setIsRunning(false);
+            setError(p.error);
+          }),
+        ]);
 
-    events.onLog((p) => {
-      sawEventRef.current = true;
-      setLogs(prev => [...prev.slice(-199), p]);
-      setTimeout(() => { logRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, 50);
-    }).then(u => unlisteners.push(u));
-
-    events.onComplete((p) => {
-      sawEventRef.current = true;
-      if (watchdogRef.current) clearTimeout(watchdogRef.current);
-      setIsRunning(false);
-      setScanRunId(p.scanRunId);
-      setTotalFindings(p.totalFindings);
-      onScanCompleteRef.current(p.scanRunId);
-    }).then(u => unlisteners.push(u));
-
-    events.onError((p) => {
-      sawEventRef.current = true;
-      if (watchdogRef.current) clearTimeout(watchdogRef.current);
-      setIsRunning(false);
-      setError(p.error);
-    }).then(u => unlisteners.push(u));
+        if (cancelled) {
+          registered.forEach(u => u());
+          return;
+        }
+        unlisteners = registered;
+        setListenersReady(true);
+      } catch (err) {
+        if (cancelled) return;
+        setListenersReady(false);
+        setError(
+          'Could not subscribe to the scan engine event stream: ' + String(err) +
+          ' — scan progress cannot be displayed. This is a build/permissions ' +
+          'fault in this installation, not a problem with the target.',
+        );
+      }
+    })();
 
     return () => {
+      cancelled = true;
       unlisteners.forEach(u => u());
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
     };
@@ -131,10 +183,21 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   }, []);
 
   async function startScan() {
+    // Without live subscriptions the engine's events go nowhere. Refuse rather
+    // than launching a scan whose progress and findings could not be shown.
+    if (!listenersReady) {
+      setError(
+        'Not subscribed to the scan engine event stream — refusing to launch a ' +
+        'scan whose progress could not be reported. Restart SentinelVAPT; if this ' +
+        'persists, the installation is missing its event permissions.',
+      );
+      return;
+    }
     setError('');
     setLogs([]);
     setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType !== 'static' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
     setTotalFindings(0);
+    setCriticalHigh(0);
     setIsRunning(true);
     sawEventRef.current = false;
     if (watchdogRef.current) clearTimeout(watchdogRef.current);
@@ -148,17 +211,18 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     watchdogRef.current = setTimeout(() => {
       if (!sawEventRef.current) {
         localLog(
-          'No response from the scan engine after 20s. The engine never reported in. ' +
-          'This usually means another copy of SentinelVAPT is still running and holding ' +
-          'the engagement database. Close every instance and try again.',
-          'error',
+          `No engine event received ${WATCHDOG_SECONDS}s after the scan was accepted. ` +
+          'The run may still be progressing in the background — this warning means only ' +
+          'that its events are not reaching this window. Check the run status before ' +
+          'relaunching, and report this with the scan run id if it repeats.',
+          'warn',
         );
         setError(
-          'The scan engine did not respond. Close all SentinelVAPT windows ' +
-          '(check Task Manager for a stray sentinel-desktop.exe) and relaunch.',
+          `No progress from the scan engine after ${WATCHDOG_SECONDS}s. The scan may ` +
+          'still be running; its events are not reaching this window.',
         );
       }
-    }, 20_000);
+    }, WATCHDOG_SECONDS * 1000);
 
     try {
       const id = await api.triggerScan(target.id, dast);
@@ -206,8 +270,13 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
               <Square size={14} /> Cancel
             </button>
           ) : (
-            <button onClick={startScan} disabled={isRunning} style={startBtnStyle}>
-              <Play size={14} /> Launch Scan
+            <button
+              onClick={startScan}
+              disabled={isRunning || !listenersReady}
+              title={listenersReady ? undefined : 'Connecting to the scan engine event stream...'}
+              style={{ ...startBtnStyle, opacity: listenersReady ? 1 : 0.5, cursor: listenersReady ? 'pointer' : 'wait' }}
+            >
+              <Play size={14} /> {listenersReady ? 'Launch Scan' : 'Connecting...'}
             </button>
           )}
         </div>
@@ -266,7 +335,7 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       {totalFindings > 0 && (
         <div style={{ display: 'flex', gap: 16 }}>
           <StatPill label="Total Findings" value={totalFindings} color="var(--cyan)" />
-          <StatPill label="Critical+High" value={0} color="var(--red)" />
+          <StatPill label="Critical+High" value={criticalHigh} color="var(--red)" />
         </div>
       )}
 

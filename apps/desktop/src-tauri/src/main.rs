@@ -6,9 +6,22 @@ mod store;
 mod event_bridge;
 #[cfg(test)]
 mod ipc_contract;
+#[cfg(test)]
+mod acl_contract;
 
 use state::AppState;
 use tauri::Manager;
+
+/// The compiled Tauri context: config, assets and the resolved capability set.
+///
+/// `generate_context!` embeds a platform symbol (the macOS Info.plist among
+/// them) and so may expand exactly once per binary. Funnelling both `main` and
+/// the ACL contract test through this one function keeps that single expansion
+/// while letting the test build the real app — capabilities included — under
+/// the mock runtime.
+fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
 
 fn main() {
     tauri::Builder::default()
@@ -62,6 +75,6 @@ fn main() {
             commands::reports::get_coverage,
             commands::reports::get_checklist_catalog,
         ])
-        .run(tauri::generate_context!())
+        .run(app_context())
         .expect("error while running SentinelVAPT desktop application");
 }

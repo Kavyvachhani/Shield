@@ -349,3 +349,101 @@ fn coverage_report_serializes_the_keys_the_frontend_reads() {
         ],
     );
 }
+
+
+// ── Outbound: the scan event payloads the console listens for ────────────────
+//
+// These four events are the entire channel between a running pipeline and the
+// scan console. Nothing else in the suite serializes them, so a renamed or
+// added field reaches the frontend as `undefined` with no failing test — which
+// is how `criticalHigh` came to be rendered as a hardcoded zero and
+// `stageSummary`/`durationSeconds` shipped empty on every scan.
+
+#[test]
+fn stage_update_payload_serializes_the_keys_the_frontend_reads() {
+    use crate::event_bridge::ScanStageUpdatePayload;
+    let value = serde_json::to_value(ScanStageUpdatePayload {
+        scan_run_id: "run-1".into(),
+        stage: "native".into(),
+        state: "done".into(),
+        stage_findings: 3,
+        total_findings: 7,
+        critical_high: 2,
+        timestamp: Utc::now(),
+        message: "Sentinel Native checks complete: 3 findings".into(),
+    })
+    .unwrap();
+
+    assert_keys(
+        &value,
+        &[
+            "scanRunId",
+            "stage",
+            "state",
+            "stageFindings",
+            "totalFindings",
+            "criticalHigh",
+            "timestamp",
+            "message",
+        ],
+    );
+}
+
+#[test]
+fn complete_payload_serializes_the_keys_the_frontend_reads() {
+    use crate::event_bridge::{ScanCompletePayload, StageSummary};
+    let value = serde_json::to_value(ScanCompletePayload {
+        scan_run_id: "run-1".into(),
+        total_findings: 7,
+        critical_high: 2,
+        stage_summary: vec![StageSummary {
+            stage: "native".into(),
+            state: "done".into(),
+            findings: 3,
+            error: None,
+        }],
+        duration_seconds: 42,
+        completed_at: Utc::now(),
+    })
+    .unwrap();
+
+    assert_keys(
+        &value,
+        &[
+            "scanRunId",
+            "totalFindings",
+            "criticalHigh",
+            "stageSummary",
+            "durationSeconds",
+            "completedAt",
+        ],
+    );
+    assert_keys(
+        &value["stageSummary"][0],
+        &["stage", "state", "findings", "error"],
+    );
+}
+
+#[test]
+fn log_and_error_payloads_serialize_the_keys_the_frontend_reads() {
+    use crate::event_bridge::{ScanErrorPayload, ScanLogPayload};
+
+    let log = serde_json::to_value(ScanLogPayload {
+        scan_run_id: "run-1".into(),
+        stage: "native".into(),
+        level: "info".into(),
+        message: "probing".into(),
+        timestamp: Utc::now(),
+    })
+    .unwrap();
+    assert_keys(&log, &["scanRunId", "stage", "level", "message", "timestamp"]);
+
+    let err = serde_json::to_value(ScanErrorPayload {
+        scan_run_id: "run-1".into(),
+        error: "boom".into(),
+        stage: None,
+        timestamp: Utc::now(),
+    })
+    .unwrap();
+    assert_keys(&err, &["scanRunId", "error", "stage", "timestamp"]);
+}
