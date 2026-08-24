@@ -34,7 +34,7 @@ a single priority ranking, and reports written for the two audiences that actual
 - **Ranks by real risk.** Priority combines CVSS 4.0, EPSS probability, CISA KEV
   membership, reachability and exposure — so the list is ordered by what matters, not by
   raw scanner severity.
-- **Tracks coverage honestly.** All 109 OWASP WSTG test cases are reported with their
+- **Tracks coverage honestly.** All 106 OWASP WSTG test cases are reported with their
   actual state, including checks that passed and those that genuinely need manual
   analysis.
 - **Reports for two audiences.** A client report (posture, plain-language risk,

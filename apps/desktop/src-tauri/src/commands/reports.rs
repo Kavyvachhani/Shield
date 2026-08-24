@@ -1,7 +1,7 @@
 use crate::state::{log_persist_error, new_id, AppState, ReportRecord};
 use chrono::Utc;
 use sentinel_core::checklist::{ChecklistEngine, CoverageReport};
-use sentinel_core::models::finding::Finding;
+use sentinel_core::models::finding::{Finding, FindingStatus};
 use sentinel_core::reporting::{ReportContext, ReportEngine};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -48,14 +48,7 @@ pub async fn generate_report(
         ));
     }
 
-    let findings: Vec<Finding> = {
-        let store = state.findings.read().await;
-        store
-            .values()
-            .filter(|s| s.scan_id == input.scan_id)
-            .map(|s| s.finding.clone())
-            .collect()
-    };
+    let findings = reportable_findings(&input.scan_id, &state).await;
 
     let ctx = build_context(&input, &state).await;
     let coverage = build_coverage(&input.scan_id, &findings, &state).await;
@@ -127,14 +120,7 @@ pub async fn get_coverage(
     scan_id: String,
     state: State<'_, AppState>,
 ) -> Result<CoverageReport, String> {
-    let findings: Vec<Finding> = {
-        let store = state.findings.read().await;
-        store
-            .values()
-            .filter(|s| s.scan_id == scan_id)
-            .map(|s| s.finding.clone())
-            .collect()
-    };
+    let findings = reportable_findings(&scan_id, &state).await;
     build_coverage(&scan_id, &findings, &state)
         .await
         .ok_or_else(|| format!("No scan run recorded for '{scan_id}'"))
@@ -232,6 +218,38 @@ pub async fn list_reports(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// The findings of a scan that belong in a deliverable.
+///
+/// A finding triaged as a false positive is not a finding: the analyst has
+/// judged that the engine was wrong. Carrying it into a report — even
+/// annotated as dismissed — asks the client to read and discount something
+/// that was never real, and inflates the counts the report is built on. It is
+/// excluded outright, and the audit trail of who dismissed it and why stays on
+/// the finding record where it belongs.
+///
+/// Every other status is kept. `Accepted Risk` and `Remediated` are decisions
+/// *about* a real finding, and a report that dropped them would hide accepted
+/// exposure from the very people accepting it.
+///
+/// Coverage is derived from this same list, so a dismissed finding also stops
+/// marking its WSTG test case as failed.
+async fn reportable_findings(scan_id: &str, state: &State<'_, AppState>) -> Vec<Finding> {
+    let store = state.findings.read().await;
+    select_reportable(store.values(), scan_id)
+}
+
+/// The selection rule itself, separated from the lock so it can be tested.
+fn select_reportable<'a>(
+    stored: impl Iterator<Item = &'a crate::state::StoredFinding>,
+    scan_id: &str,
+) -> Vec<Finding> {
+    stored
+        .filter(|s| s.scan_id == scan_id)
+        .filter(|s| s.finding.status != FindingStatus::FalsePositive)
+        .map(|s| s.finding.clone())
+        .collect()
+}
 
 async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>) -> ReportContext {
     let run = state.scan_runs.read().await.get(&input.scan_id).cloned();
@@ -336,6 +354,80 @@ pub fn sanitize_filename(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::state::StoredFinding;
+    use sentinel_core::models::finding::Severity;
+    use uuid::Uuid;
+
+    fn stored(scan_id: &str, title: &str, status: FindingStatus) -> StoredFinding {
+        StoredFinding {
+            scan_id: scan_id.to_string(),
+            triage_note: Some("[2026-01-01T00:00:00Z] analyst → dismissed: not exploitable".into()),
+            finding: Finding {
+                id: Uuid::new_v4(),
+                scan_id: Uuid::new_v4(),
+                target_id: Uuid::new_v4(),
+                title: title.into(),
+                description: "d".into(),
+                severity: Severity::High,
+                cvss4: None,
+                epss: None,
+                kev_listed: false,
+                asset_exposure_factor: 1.0,
+                reachability_score: 1.0,
+                priority_score: 5.0,
+                cwe_id: None,
+                owasp_2025: None,
+                wstg_id: None,
+                api_top10: None,
+                affected_component: "https://acme.test/x".into(),
+                evidences: vec![],
+                repro_steps: vec![],
+                remediation: "fix".into(),
+                references: vec![],
+                status,
+                source_tools: vec!["Sentinel Native".into()],
+                ai_triage: None,
+                priority_rationale: "r".into(),
+                created_at: Utc::now(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_finding_dismissed_as_a_false_positive_never_reaches_a_report() {
+        let all = vec![
+            stored("s1", "real", FindingStatus::Open),
+            stored("s1", "bogus", FindingStatus::FalsePositive),
+        ];
+        let selected = select_reportable(all.iter(), "s1");
+        assert_eq!(selected.len(), 1, "the dismissed finding must be dropped entirely");
+        assert_eq!(selected[0].title, "real");
+    }
+
+    /// Accepting a risk or fixing it is a decision about a real finding. A
+    /// report that dropped those would hide accepted exposure from the people
+    /// who accepted it.
+    #[test]
+    fn accepted_and_remediated_findings_stay_in_the_report() {
+        let all = vec![
+            stored("s1", "accepted", FindingStatus::AcceptedRisk),
+            stored("s1", "fixed", FindingStatus::Remediated),
+            stored("s1", "working", FindingStatus::InProgress),
+        ];
+        assert_eq!(select_reportable(all.iter(), "s1").len(), 3);
+    }
+
+    #[test]
+    fn only_the_requested_scan_is_included() {
+        let all = vec![
+            stored("s1", "mine", FindingStatus::Open),
+            stored("s2", "other", FindingStatus::Open),
+        ];
+        let selected = select_reportable(all.iter(), "s1");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].title, "mine");
+    }
 
     #[test]
     fn report_types_cover_both_audiences_and_machine_formats() {

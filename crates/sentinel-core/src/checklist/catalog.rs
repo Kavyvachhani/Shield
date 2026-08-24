@@ -439,7 +439,11 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-SESS-07", category_code: "SESS", category: "Session Management",
         name: "Testing Session Timeout",
-        coverage: Manual, engines: E_ANALYST, owasp_2025: A07, cwe: "CWE-613",
+        // Partial, not Automated: the engine reads the lifetime the server puts
+        // on the session cookie, which catches a session that outlives the
+        // browser. Whether the server itself expires an idle session still
+        // needs a human, so the analyst stays on this item.
+        coverage: Partial, engines: E_NATIVE_ANALYST, owasp_2025: A07, cwe: "CWE-613",
         client_summary: "Check that idle sessions expire after a reasonable period.",
     },
     ChecklistItem {

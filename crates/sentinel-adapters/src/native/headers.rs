@@ -242,6 +242,21 @@ it with anti-CSRF tokens.",
     ],
 };
 
+const SESSION_LONG_LIVED: CheckSpec = CheckSpec {
+    id: "NATIVE-SESSION-LIFETIME",
+    title: "Session Cookie Persists Far Beyond a Working Session",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-613",
+    wstg: "WSTG-SESS-07",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "The session cookie is issued as a persistent cookie with a lifetime measured in days rather than as a browser-session cookie. It therefore survives the browser being closed, and any party who later obtains the stored cookie — on a shared or stolen device, from a backup, or through client-side disclosure — can resume the session without ever seeing a credential. A long cookie lifetime also widens the window in which a session stolen by any other means stays usable.",
+    remediation: "Issue session cookies without `Max-Age` or `Expires` so the browser discards them when it closes, and enforce both an idle timeout and an absolute timeout on the server. Where a \"remember me\" feature genuinely needs persistence, use a separate long-lived token that is exchanged for a fresh short session and can be revoked independently.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+    ],
+};
+
 const CACHE_SENSITIVE: CheckSpec = CheckSpec {
     id: "NATIVE-CACHE-CONTROL",
     title: "Authenticated Response Cacheable by Browsers and Proxies",
@@ -282,6 +297,7 @@ pub const SPECS: &[CheckSpec] = &[
     COOKIE_INSECURE,
     COOKIE_NO_HTTPONLY,
     COOKIE_NO_SAMESITE,
+    SESSION_LONG_LIVED,
     CACHE_SENSITIVE,
 ];
 
@@ -450,6 +466,25 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
                 vec![NativeFinding::evidence("http_response", "Set-Cookie (value redacted)", &redacted)],
             ));
         }
+        // A persistent session cookie outlives the browser. Anything past a
+        // working day is treated as persistence rather than a session; a cookie
+        // with no lifetime at all is the correct case and is not flagged.
+        const A_WORKING_DAY: i64 = 12 * 60 * 60;
+        if let Some(lifetime) = cookie.lifetime_seconds() {
+            if lifetime > A_WORKING_DAY {
+                findings.push(make(
+                    &SESSION_LONG_LIVED,
+                    format!(
+                        "Cookie '{}' is issued with a lifetime of {} ({} seconds), so it survives the browser closing.",
+                        cookie.name,
+                        humanise_duration(lifetime),
+                        lifetime
+                    ),
+                    vec![format!("curl -sSI {url} | grep -i set-cookie")],
+                    vec![NativeFinding::evidence("http_response", "Set-Cookie (value redacted)", &redacted)],
+                ));
+            }
+        }
         match cookie.same_site.as_deref() {
             None => findings.push(make(
                 &COOKIE_NO_SAMESITE,
@@ -585,6 +620,19 @@ pub fn discloses_version(value: &str) -> bool {
     value.to_lowercase().contains("asp.net")
 }
 
+/// Render a duration in seconds as the largest sensible unit, for report prose.
+fn humanise_duration(seconds: i64) -> String {
+    const DAY: i64 = 86_400;
+    const HOUR: i64 = 3_600;
+    if seconds >= DAY {
+        let days = seconds / DAY;
+        format!("{days} day{}", if days == 1 { "" } else { "s" })
+    } else {
+        let hours = seconds / HOUR;
+        format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+    }
+}
+
 /// A parsed Set-Cookie header.
 #[derive(Debug, Clone)]
 pub struct ParsedCookie {
@@ -624,6 +672,34 @@ impl ParsedCookie {
         }
 
         Self { name, secure, http_only, same_site, attributes }
+    }
+
+    /// How long the browser is told to keep this cookie, in seconds.
+    ///
+    /// `None` means the cookie carries neither `Max-Age` nor `Expires`, which
+    /// makes it a browser-session cookie: it is discarded when the browser
+    /// closes. That is the desirable case for a session cookie, so callers must
+    /// not treat `None` as "no limit".
+    ///
+    /// `Max-Age` wins over `Expires` where both appear, as RFC 6265 requires.
+    pub fn lifetime_seconds(&self) -> Option<i64> {
+        for attr in &self.attributes {
+            let lower = attr.to_lowercase();
+            if let Some(v) = lower.strip_prefix("max-age=") {
+                return v.trim().parse::<i64>().ok();
+            }
+        }
+        for attr in &self.attributes {
+            let lower = attr.to_lowercase();
+            if let Some(v) = lower.strip_prefix("expires=") {
+                // Set-Cookie dates are RFC 1123; a past date is a deletion, and
+                // a negative result is meaningful, so it is not clamped here.
+                if let Ok(when) = chrono::DateTime::parse_from_rfc2822(v.trim()) {
+                    return Some((when.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds());
+                }
+            }
+        }
+        None
     }
 
     /// Heuristic: does this cookie carry session or authentication state?
@@ -715,6 +791,49 @@ mod tests {
         assert!(c.secure);
         assert!(c.http_only);
         assert_eq!(c.same_site.as_deref(), Some("lax"));
+    }
+
+    #[test]
+    fn a_browser_session_cookie_declares_no_lifetime() {
+        let c = ParsedCookie::parse("SESSIONID=abc; Path=/; HttpOnly; Secure");
+        assert_eq!(c.lifetime_seconds(), None, "no Max-Age and no Expires is a session cookie");
+    }
+
+    #[test]
+    fn max_age_is_read_as_the_lifetime() {
+        let c = ParsedCookie::parse("SESSIONID=abc; Max-Age=2592000; Path=/");
+        assert_eq!(c.lifetime_seconds(), Some(2_592_000));
+    }
+
+    /// RFC 6265 gives Max-Age precedence when both attributes are present.
+    #[test]
+    fn max_age_wins_over_expires() {
+        let c = ParsedCookie::parse(
+            "SESSIONID=abc; Expires=Wed, 09 Jun 2100 10:18:14 GMT; Max-Age=60",
+        );
+        assert_eq!(c.lifetime_seconds(), Some(60));
+    }
+
+    #[test]
+    fn an_expires_date_is_read_as_a_lifetime_from_now() {
+        let future = chrono::Utc::now() + chrono::Duration::days(30);
+        let raw = format!("SESSIONID=abc; Expires={}", future.format("%a, %d %b %Y %H:%M:%S +0000"));
+        let seconds = ParsedCookie::parse(&raw).lifetime_seconds().expect("a date must parse");
+        // Allow a little slack for the clock moving between the two calls.
+        assert!((2_591_000..=2_592_100).contains(&seconds), "got {seconds}");
+    }
+
+    #[test]
+    fn a_malformed_lifetime_is_ignored_rather_than_guessed() {
+        assert_eq!(ParsedCookie::parse("SID=a; Max-Age=soon").lifetime_seconds(), None);
+        assert_eq!(ParsedCookie::parse("SID=a; Expires=never").lifetime_seconds(), None);
+    }
+
+    #[test]
+    fn durations_read_naturally_in_prose() {
+        assert_eq!(humanise_duration(86_400), "1 day");
+        assert_eq!(humanise_duration(2_592_000), "30 days");
+        assert_eq!(humanise_duration(50_400), "14 hours");
     }
 
     #[test]
