@@ -105,6 +105,18 @@ cargo clippy --workspace --all-targets
 npm run lint             # frontend
 ```
 
+One test is opt-in: `e2e_real_run_test` drives the whole pipeline against a
+live web target and a real source checkout, so it runs only when asked.
+
+```bash
+SENTINEL_E2E_LIVE=1 cargo test -p sentinel-core --test e2e_real_run_test
+```
+
+It defaults to a target at `http://localhost:3000` (an OWASP Juice Shop) and
+the checkout at `scratch/target-repo`; override either with
+`SENTINEL_E2E_TARGET_URL` and `SENTINEL_E2E_REPO_PATH`. With the switch set it
+fails if those inputs are missing rather than passing over an empty scan.
+
 ### Layout
 
 | Path | Purpose |
