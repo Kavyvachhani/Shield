@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Eye, Loader2, FileText, ImagePlus, X } from 'lucide-react';
+import { Download, Eye, Loader2, FileText, ImagePlus, Printer, X } from 'lucide-react';
 import type { GenerateReportInput, GenerateReportOutput, Project, ReportType } from '../types';
 import { api } from '../lib/tauri';
 
@@ -9,6 +9,65 @@ import { api } from '../lib/tauri';
  */
 const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Send a report to the platform print pipeline, which is what turns it into a
+ * PDF.
+ *
+ * The report stylesheet already carries a full `@media print` block — A4 page
+ * size, margins, repeated table headers and per-block page-break rules — so the
+ * printed result is the intended document rather than a screenshot of a web
+ * page. All this has to do is hand that document to the printer.
+ *
+ * The frame is sandboxed. `allow-same-origin` is required for this window to
+ * reach `contentWindow` at all, and `allow-modals` for the print dialog to
+ * open; `allow-scripts` is deliberately withheld, so report content — which is
+ * derived from the assessed target — still cannot execute inside the
+ * application. That is the same guarantee the on-screen preview makes.
+ *
+ * Resolves once the frame has been torn down, so the caller can restore the
+ * button. `afterprint` fires whether the user saved or cancelled; the timeout
+ * is a backstop for platforms that do not emit it.
+ */
+function printReport(html: string): Promise<void> {
+  return new Promise((resolve) => {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
+    frame.setAttribute('aria-hidden', 'true');
+    // Kept on-page but out of sight: `display:none` stops some engines
+    // laying the document out, and an unlaid-out document prints blank.
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0';
+
+    let settled = false;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      frame.remove();
+      resolve();
+    };
+
+    frame.onload = () => {
+      const view = frame.contentWindow;
+      if (!view) {
+        cleanup();
+        return;
+      }
+      view.addEventListener('afterprint', cleanup);
+      // A backstop only: if `afterprint` never arrives the frame would leak.
+      const backstop = window.setTimeout(cleanup, 120_000);
+      view.addEventListener('afterprint', () => window.clearTimeout(backstop));
+      try {
+        view.focus();
+        view.print();
+      } catch {
+        cleanup();
+      }
+    };
+
+    document.body.appendChild(frame);
+    frame.srcdoc = html;
+  });
+}
 
 /** Read a picked file as a `data:image/...;base64,` URI. */
 function readAsDataUri(file: File): Promise<string> {
@@ -82,6 +141,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
   const [preview, setPreview] = useState(false);
   const [exportDir, setExportDir] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
   const [error, setError] = useState('');
   const [logo, setLogo] = useState<string | undefined>(project.logoDataUri);
@@ -192,6 +252,24 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
       setError(String(err));
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function saveAsPdf() {
+    if (!report) return;
+    setPrinting(true);
+    setExportMsg('');
+    setError('');
+    try {
+      await printReport(report.content);
+      // This resolves once the dialog has closed, and the dialog does not say
+      // whether the user saved or cancelled or where the file went — so the
+      // message can only confirm the hand-off, never claim a file was written.
+      setExportMsg('Report sent to the print dialog. If you chose a PDF destination, it saved there.');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setPrinting(false);
     }
   }
 
@@ -386,10 +464,22 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               )}
             </div>
             {isHtml && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.6 }}>
-                To produce a PDF, open the saved HTML file in your browser and choose
-                Print → Save as PDF. The report is styled for A4 with page breaks already set.
-              </div>
+              <>
+                <button
+                  type="button"
+                  onClick={saveAsPdf}
+                  disabled={printing}
+                  style={{ ...secondaryButton, width: '100%', marginTop: 8, opacity: printing ? 0.6 : 1 }}
+                >
+                  {printing ? <Loader2 size={15} className="spin" /> : <Printer size={15} />}
+                  Save as PDF
+                </button>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.6 }}>
+                  Opens your print dialog with the report already laid out for A4.
+                  Choose <strong>Save as PDF</strong> as the destination — on Windows
+                  that is <strong>Microsoft Print to PDF</strong>.
+                </div>
+              </>
             )}
           </Section>
         )}
