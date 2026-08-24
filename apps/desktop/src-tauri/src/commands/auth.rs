@@ -53,12 +53,7 @@ pub async fn create_scope_and_roe(
         ));
     }
 
-    // Compute SHA-256 of the submitted RoE document
-    let mut hasher = Sha256::new();
-    hasher.update(input.roe_document_text.as_bytes());
-    hasher.update(input.acknowledged_by.as_bytes());
-    hasher.update(Utc::now().to_rfc3339().as_bytes());
-    let roe_hash = format!("{:x}", hasher.finalize());
+    let roe_hash = hash_roe_document(&input.roe_document_text);
 
     let record = AuthorizationRecord {
         id: new_id(),
@@ -78,6 +73,25 @@ pub async fn create_scope_and_roe(
         .insert(input.target_id.clone(), record.clone());
 
     Ok(record)
+}
+
+/// SHA-256 of the Rules of Engagement document, exactly as submitted.
+///
+/// This hash is printed in the client report's Scope & Attestation table as
+/// the authorisation record: it is the artifact that lets anyone holding the
+/// signed RoE confirm the assessment was run against *that* document. Its only
+/// value is that it can be recomputed and compared.
+///
+/// It previously also mixed in `acknowledged_by` and a fresh `Utc::now()`. The
+/// timestamp was never stored — and was not even the same instant as
+/// `signed_at`, which is a separate `Utc::now()` call — so the hash could not
+/// be reproduced by anyone, including us. An attestation nobody can verify is
+/// not evidence, so hash the document and nothing else. Who acknowledged it and
+/// when are recorded as their own fields on the record.
+pub fn hash_roe_document(document_text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(document_text.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Verify whether a target has a valid, signed authorization record.
@@ -100,4 +114,36 @@ pub async fn get_authorization_record(
     state: State<'_, AppState>,
 ) -> Result<Option<AuthorizationRecord>, String> {
     Ok(state.auth_records.read().await.get(&target_id).cloned())
+}
+
+#[cfg(test)]
+mod roe_hash_tests {
+    use super::hash_roe_document;
+
+    /// The whole point of the attestation hash: someone holding the signed
+    /// document can recompute it and get the same value. Salting it with an
+    /// unstored timestamp made that impossible.
+    #[test]
+    fn the_same_document_always_hashes_the_same() {
+        let doc = "Rules of Engagement for Acme Corp, signed by the CISO.";
+        assert_eq!(hash_roe_document(doc), hash_roe_document(doc));
+    }
+
+    #[test]
+    fn different_documents_hash_differently() {
+        assert_ne!(
+            hash_roe_document("RoE covering app.acme.test"),
+            hash_roe_document("RoE covering api.acme.test"),
+        );
+    }
+
+    /// A known vector, so the algorithm cannot silently change under a record
+    /// that was already issued to a client.
+    #[test]
+    fn matches_the_published_sha256_of_its_input() {
+        assert_eq!(
+            hash_roe_document("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }
