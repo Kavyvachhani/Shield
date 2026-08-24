@@ -62,6 +62,10 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   // slow. Kept in a ref because the watchdog timer closes over it.
   const sawEventRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Holds the latest callback so the mount-once listener effect below never
+  // closes over a stale `onScanComplete` without having to re-run itself.
+  const onScanCompleteRef = useRef(onScanComplete);
+  onScanCompleteRef.current = onScanComplete;
 
   const isAuthorized = !!authRecord;
 
@@ -74,7 +78,17 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     ]);
   }
 
-  // Subscribe to Tauri scan events
+  // Subscribe to Tauri scan events exactly once per mount. This used to
+  // depend on `[onScanComplete]`, a callback App.tsx recreates on every
+  // render — if App re-rendered while a scan was in flight, this effect tore
+  // down and re-registered all four listeners. Because `listen()` resolves
+  // asynchronously, a cleanup that ran before a registration's promise
+  // settled orphaned that listener (it kept firing but nothing could ever
+  // remove it), while the new effect run added a duplicate on top of it,
+  // producing duplicated log lines and, worse, a window in which a scan
+  // event could be dropped between the old subscription tearing down and the
+  // new one attaching. Registering once and reading the callback through a
+  // ref removes the churn entirely.
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
 
@@ -99,7 +113,7 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       setIsRunning(false);
       setScanRunId(p.scanRunId);
       setTotalFindings(p.totalFindings);
-      onScanComplete(p.scanRunId);
+      onScanCompleteRef.current(p.scanRunId);
     }).then(u => unlisteners.push(u));
 
     events.onError((p) => {
@@ -113,7 +127,8 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       unlisteners.forEach(u => u());
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
     };
-  }, [onScanComplete]);
+    // Intentionally mount-once — see the comment above.
+  }, []);
 
   async function startScan() {
     setError('');

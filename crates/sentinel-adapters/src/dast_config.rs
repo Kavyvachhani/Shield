@@ -227,6 +227,15 @@ pub struct NucleiConfig {
     pub exclude_tags: Option<String>,
 
     /// Additional user-supplied template directories (comma-separated paths).
+    ///
+    /// Unlike `Option<T>` fields, serde does not treat a bare `Vec<T>` as
+    /// optional-if-missing — without `#[serde(default)]` a `config_json` that
+    /// sets any *other* `nuclei` field (e.g. just `include_tags`) without also
+    /// repeating this one fails to parse `DastConfig` entirely. Every adapter
+    /// calls `DastConfig::from_json` on the same string before touching its
+    /// own sub-config, so that one omission broke Semgrep, Trivy and Native
+    /// too, not just Nuclei.
+    #[serde(default)]
     pub custom_template_paths: Vec<String>,
 }
 
@@ -235,7 +244,22 @@ impl Default for NucleiConfig {
         Self {
             severity_filter: Self::default_severity(),
             templates_path: None,
-            include_tags: None,
+            // No `-tags` filter means Nuclei attempts every template in the
+            // user's installed set — commonly upward of ten thousand — and
+            // there is currently no UI to configure this differently, so
+            // `Self::default()` is the scope every real scan actually gets.
+            // Left untagged, a default scan reliably consumes its entire
+            // wall-clock budget (`DastConfig::timeout_seconds`, enforced in
+            // nuclei.rs) and returns whatever partial results happened to
+            // complete first — observed directly: an untagged run against a
+            // real, reachable target used its full 30-minute budget and
+            // produced a single finding, where the same run scoped to these
+            // tags finished naturally with real, complete results. This set
+            // covers the categories that matter for a web-app assessment
+            // (exposed panels, misconfiguration, known CVEs, default
+            // credentials, fingerprinting) without the long tail of narrow
+            // CVE templates for stacks the target likely isn't running.
+            include_tags: Some(Self::default_include_tags()),
             // Always exclude destructive templates by default (non-destructive guarantee)
             exclude_tags: Some("dos,fuzzing,intrusive".into()),
             custom_template_paths: vec![],
@@ -245,6 +269,9 @@ impl Default for NucleiConfig {
 
 impl NucleiConfig {
     fn default_severity() -> String { "critical,high,medium".into() }
+    fn default_include_tags() -> String {
+        "exposure,misconfiguration,tech,cve,default-login,exposed-panels".into()
+    }
 }
 
 // ── Semgrep Config ────────────────────────────────────────────────────────────
@@ -450,5 +477,70 @@ impl DastConfig {
             ZapScanThreshold::Medium => "MEDIUM",
             ZapScanThreshold::High   => "HIGH",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_config_json_uses_every_default() {
+        let cfg = DastConfig::from_json("").expect("empty string is the documented default sentinel");
+        assert_eq!(cfg.rate_limit_rps, DastConfig::default_rps());
+        assert!(cfg.nuclei.custom_template_paths.is_empty());
+    }
+
+    /// There is currently no UI to configure `config_json`, so every real
+    /// scan runs with `NucleiConfig::default()` exactly as-is. An untagged
+    /// Nuclei run attempts every installed template — observed directly to
+    /// consume its full wall-clock budget and return only a single finding
+    /// against a real target, where the same run scoped to a sensible tag
+    /// set finished naturally with complete results. The default must stay
+    /// scoped until a UI exists to let an analyst deliberately widen it.
+    #[test]
+    fn nuclei_defaults_to_a_scoped_tag_set_so_a_default_scan_can_finish() {
+        let cfg = NucleiConfig::default();
+        let tags = cfg.include_tags.expect("default scan must be tag-scoped, not unbounded");
+        for expected in ["exposure", "misconfiguration", "cve", "default-login", "exposed-panels"] {
+            assert!(tags.contains(expected), "default tag scope must include '{expected}'");
+        }
+    }
+
+    /// The exact shape a future DAST-config UI (or any other caller) would
+    /// send: only the one field the analyst actually changed, nothing else.
+    /// Every field in every nested config must therefore parse when absent —
+    /// `custom_template_paths` used to be the one exception, and because
+    /// every adapter (Semgrep, Trivy, Native, Nuclei) calls
+    /// `DastConfig::from_json` on the same string before reading its own
+    /// section, that single missing default broke the entire pipeline, not
+    /// just Nuclei.
+    #[test]
+    fn a_partial_nuclei_object_still_parses_the_whole_config() {
+        let cfg = DastConfig::from_json(r#"{"nuclei":{"include_tags":"exposure,cve"}}"#)
+            .expect("a partial nuclei object must not fail the whole DastConfig parse");
+        assert_eq!(cfg.nuclei.include_tags.as_deref(), Some("exposure,cve"));
+        assert!(cfg.nuclei.custom_template_paths.is_empty());
+        // Fields not touched by the partial object still carry their defaults.
+        assert_eq!(cfg.nuclei.severity_filter, NucleiConfig::default_severity());
+        assert_eq!(cfg.rate_limit_rps, DastConfig::default_rps());
+    }
+
+    #[test]
+    fn a_partial_nuclei_object_with_only_severity_still_parses() {
+        let cfg = DastConfig::from_json(r#"{"nuclei":{"severity_filter":"critical"}}"#)
+            .expect("a partial nuclei object must not fail the whole DastConfig parse");
+        assert_eq!(cfg.nuclei.severity_filter, "critical");
+    }
+
+    #[test]
+    fn every_top_level_field_survives_an_empty_object() {
+        let cfg = DastConfig::from_json("{}").expect("an empty JSON object must use every default");
+        let default = DastConfig::default();
+        assert_eq!(cfg.rate_limit_rps, default.rate_limit_rps);
+        assert_eq!(cfg.timeout_seconds, default.timeout_seconds);
+        assert_eq!(cfg.nuclei.custom_template_paths, default.nuclei.custom_template_paths);
+        assert_eq!(cfg.semgrep.rule_packs, default.semgrep.rule_packs);
+        assert_eq!(cfg.trivy.scanners, default.trivy.scanners);
     }
 }

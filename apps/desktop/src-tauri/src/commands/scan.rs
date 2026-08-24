@@ -151,24 +151,40 @@ pub async fn trigger_scan(
         let mut total_findings = 0usize;
         let mut engines_executed: Vec<String> = Vec::new();
 
-        for (idx, stage_name) in stages.iter().enumerate() {
-            let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
-                scan_run_id: run_id_clone.clone(),
-                stage: stage_name.to_string(),
-                state: "running".into(),
-                stage_findings: 0,
-                total_findings,
-                timestamp: Utc::now(),
-                message: format!("Starting {} scan...", engine_label(stage_name)),
-            });
+        // Semgrep, Trivy and Gitleaks are three independent local file
+        // analyzers: none of them touches the network or shares state with
+        // the others, so running them one after another was pure wasted wall
+        // clock — on a real repository each can easily take a minute or more
+        // on its own. They are always exactly the first three entries of
+        // BASELINE_STAGES, so they run concurrently via `tokio::join!` here.
+        // Native, ZAP and Nuclei stay sequential below: all three make real
+        // requests to the same target, and running them concurrently would
+        // let their combined traffic exceed the RoE's agreed rate limit,
+        // which is a safety guarantee, not just a performance one.
+        debug_assert_eq!(&stages[..3], &["semgrep", "trivy", "gitleaks"]);
 
-            let _ = app.emit(EVENT_LOG, ScanLogPayload {
-                scan_run_id: run_id_clone.clone(),
-                stage: stage_name.to_string(),
-                level: "info".into(),
-                message: format!("[{}] Invoking user-installed {} binary...", idx + 1, stage_name),
-                timestamp: Utc::now(),
-            });
+        for (idx, stage_name) in stages[..3].iter().enumerate() {
+            emit_stage_starting(&app, &run_id_clone, stage_name, idx, total_findings);
+        }
+        let (semgrep_result, trivy_result, gitleaks_result) = tokio::join!(
+            run_stage_bounded("semgrep", &core_target, &config_json),
+            run_stage_bounded("trivy", &core_target, &config_json),
+            run_stage_bounded("gitleaks", &core_target, &config_json),
+        );
+        for (stage_name, result) in [
+            ("semgrep", semgrep_result),
+            ("trivy", trivy_result),
+            ("gitleaks", gitleaks_result),
+        ] {
+            process_stage_result(
+                &app, &store_clone, &findings_clone, &run_id_clone,
+                stage_name, result, &mut total_findings, &mut engines_executed,
+            ).await;
+        }
+
+        for (offset, stage_name) in stages[3..].iter().enumerate() {
+            let idx = offset + 3;
+            emit_stage_starting(&app, &run_id_clone, stage_name, idx, total_findings);
 
             // A stage that never returns takes the whole pipeline with it: no
             // further events are emitted, so every remaining card sits on
@@ -176,88 +192,12 @@ pub async fn trigger_scan(
             // from a slow one. An external scanner blocked on input, or a host
             // that accepts a connection and then goes silent, both do this.
             // Bound every stage so the run always finishes and always reports.
-            let stage_result = match tokio::time::timeout(
-                STAGE_TIMEOUT,
-                run_stage_for(stage_name, &core_target, &config_json),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(anyhow::anyhow!(
-                    "{} exceeded the {}-minute stage timeout and was abandoned; \
-                     the target may be dropping packets or the scanner may be waiting on input",
-                    engine_label(stage_name),
-                    STAGE_TIMEOUT.as_secs() / 60
-                )),
-            };
+            let stage_result = run_stage_bounded(stage_name, &core_target, &config_json).await;
 
-            match stage_result {
-                Ok(raw_findings) => {
-                    let stage_finding_count = raw_findings.len();
-                    // The stage completed, so its engine counts as coverage even
-                    // when it produced nothing — a clean pass is a real result.
-                    engines_executed.push(engine_name(stage_name).to_string());
-
-                    // Persist the stage's findings before updating memory, so a
-                    // crash mid-pipeline still leaves completed stages on disk.
-                    if let Err(e) = store_clone.save_findings(&run_id_clone, &raw_findings) {
-                        log_persist_error("scan findings", &e);
-                    }
-                    {
-                        let mut store = findings_clone.write().await;
-                        for f in raw_findings {
-                            store.insert(
-                                f.id.to_string(),
-                                StoredFinding {
-                                    scan_id: run_id_clone.clone(),
-                                    finding: f,
-                                    triage_note: None,
-                                },
-                            );
-                        }
-                    }
-                    total_findings += stage_finding_count;
-
-                    let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
-                        scan_run_id: run_id_clone.clone(),
-                        stage: stage_name.to_string(),
-                        state: "done".into(),
-                        stage_findings: stage_finding_count,
-                        total_findings,
-                        timestamp: Utc::now(),
-                        message: format!("{} complete: {} findings", engine_label(stage_name), stage_finding_count),
-                    });
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    // A missing scanner, an unreachable daemon, or a stage the
-                    // RoE gate declined are all "this did not run" rather than
-                    // "this broke" — surfacing them as failures reads as a bug
-                    // in the app when it is really a setup or authorization
-                    // state the analyst can act on.
-                    let is_skip = msg.contains("not found on PATH")
-                        || msg.contains("not found or unreachable")
-                        || msg.contains("AUTH GATE BLOCKED")
-                        || msg.contains("no source repository");
-                    let stage_state = if is_skip { "skipped" } else { "failed" };
-                    let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
-                        scan_run_id: run_id_clone.clone(),
-                        stage: stage_name.to_string(),
-                        state: stage_state.into(),
-                        stage_findings: 0,
-                        total_findings,
-                        timestamp: Utc::now(),
-                        message: msg.clone(),
-                    });
-                    let _ = app.emit(EVENT_LOG, ScanLogPayload {
-                        scan_run_id: run_id_clone.clone(),
-                        stage: stage_name.to_string(),
-                        level: if is_skip { "warn" } else { "error" }.into(),
-                        message: msg,
-                        timestamp: Utc::now(),
-                    });
-                }
-            }
+            process_stage_result(
+                &app, &store_clone, &findings_clone, &run_id_clone,
+                stage_name, stage_result, &mut total_findings, &mut engines_executed,
+            ).await;
         }
 
         let total = total_findings;
@@ -375,6 +315,149 @@ async fn run_stage_for(
     }
 }
 
+/// Run one stage, bounded by `STAGE_TIMEOUT` so a wedged scanner can never
+/// hang the rest of the pipeline.
+async fn run_stage_bounded(
+    stage_name: &str,
+    target: &sentinel_core::models::target::Target,
+    config_json: &str,
+) -> anyhow::Result<Vec<sentinel_core::models::finding::Finding>> {
+    match tokio::time::timeout(STAGE_TIMEOUT, run_stage_for(stage_name, target, config_json)).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "{} exceeded the {}-minute stage timeout and was abandoned; \
+             the target may be dropping packets or the scanner may be waiting on input",
+            engine_label(stage_name),
+            STAGE_TIMEOUT.as_secs() / 60
+        )),
+    }
+}
+
+/// Emit the "a stage is starting" event pair the scan console listens for.
+fn emit_stage_starting(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    stage_name: &str,
+    idx: usize,
+    total_findings: usize,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
+        scan_run_id: run_id.to_string(),
+        stage: stage_name.to_string(),
+        state: "running".into(),
+        stage_findings: 0,
+        total_findings,
+        timestamp: Utc::now(),
+        message: format!("Starting {} scan...", engine_label(stage_name)),
+    });
+
+    let _ = app.emit(EVENT_LOG, ScanLogPayload {
+        scan_run_id: run_id.to_string(),
+        stage: stage_name.to_string(),
+        level: "info".into(),
+        message: format!("[{}] Invoking user-installed {} binary...", idx + 1, stage_name),
+        timestamp: Utc::now(),
+    });
+}
+
+/// Persist a completed stage's findings and emit its done/skipped/failed
+/// event pair. Shared by the parallel static-analysis block and the
+/// sequential network-stage loop so both classify and report identically.
+async fn process_stage_result(
+    app: &tauri::AppHandle,
+    store: &crate::store::Store,
+    findings: &tokio::sync::RwLock<std::collections::HashMap<String, StoredFinding>>,
+    run_id: &str,
+    stage_name: &str,
+    result: anyhow::Result<Vec<sentinel_core::models::finding::Finding>>,
+    total_findings: &mut usize,
+    engines_executed: &mut Vec<String>,
+) {
+    use tauri::Emitter;
+
+    match result {
+        Ok(raw_findings) => {
+            let stage_finding_count = raw_findings.len();
+            // The stage completed, so its engine counts as coverage even
+            // when it produced nothing — a clean pass is a real result.
+            engines_executed.push(engine_name(stage_name).to_string());
+
+            // Persist the stage's findings before updating memory, so a
+            // crash mid-pipeline still leaves completed stages on disk.
+            if let Err(e) = store.save_findings(run_id, &raw_findings) {
+                log_persist_error("scan findings", &e);
+            }
+            {
+                let mut store = findings.write().await;
+                for f in raw_findings {
+                    store.insert(
+                        f.id.to_string(),
+                        StoredFinding {
+                            scan_id: run_id.to_string(),
+                            finding: f,
+                            triage_note: None,
+                        },
+                    );
+                }
+            }
+            *total_findings += stage_finding_count;
+
+            let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
+                scan_run_id: run_id.to_string(),
+                stage: stage_name.to_string(),
+                state: "done".into(),
+                stage_findings: stage_finding_count,
+                total_findings: *total_findings,
+                timestamp: Utc::now(),
+                message: format!("{} complete: {} findings", engine_label(stage_name), stage_finding_count),
+            });
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // A missing scanner, an unreachable daemon, or a stage the
+            // RoE gate declined are all "this did not run" rather than
+            // "this broke" — surfacing them as failures reads as a bug
+            // in the app when it is really a setup or authorization
+            // state the analyst can act on.
+            let is_skip = is_skip_message(&msg);
+            let stage_state = if is_skip { "skipped" } else { "failed" };
+            let _ = app.emit(EVENT_STAGE_UPDATE, ScanStageUpdatePayload {
+                scan_run_id: run_id.to_string(),
+                stage: stage_name.to_string(),
+                state: stage_state.into(),
+                stage_findings: 0,
+                total_findings: *total_findings,
+                timestamp: Utc::now(),
+                message: msg.clone(),
+            });
+            let _ = app.emit(EVENT_LOG, ScanLogPayload {
+                scan_run_id: run_id.to_string(),
+                stage: stage_name.to_string(),
+                level: if is_skip { "warn" } else { "error" }.into(),
+                message: msg,
+                timestamp: Utc::now(),
+            });
+        }
+    }
+}
+
+/// Whether a stage error means "this did not run" (missing binary, no repo
+/// configured, RoE gate declined it) rather than "this broke".
+///
+/// Semgrep, Trivy and Gitleaks report a missing `repo_ref` as "requires a
+/// repository path" — not "no source repository", which is the string this
+/// function used to look for and which none of them ever emit. Every
+/// URL-only target (the app's advertised no-setup path) therefore showed
+/// three red FAILED cards for entirely expected behaviour: those stages have
+/// nothing to scan without a cloned repository.
+fn is_skip_message(msg: &str) -> bool {
+    msg.contains("not found on PATH")
+        || msg.contains("not found or unreachable")
+        || msg.contains("AUTH GATE BLOCKED")
+        || msg.contains("requires a repository path")
+}
+
 /// Engine name as used by the checklist coverage catalog.
 fn engine_name(stage: &str) -> &'static str {
     match stage {
@@ -416,6 +499,39 @@ mod tests {
     #[test]
     fn native_stage_name_matches_the_checklist_catalog() {
         assert_eq!(engine_name("native"), sentinel_core::checklist::catalog::engine::NATIVE);
+    }
+
+    /// A URL-only target — the app's advertised no-setup scanning path — has no
+    /// `repo_ref`, so Semgrep, Trivy and Gitleaks all decline with "requires a
+    /// repository path". That is expected behaviour, not a bug, and must show
+    /// as a skipped stage rather than a red failure. `is_skip_message` used to
+    /// look for "no source repository", a string none of the three adapters
+    /// ever emit, so every URL-only scan showed three FAILED cards.
+    #[test]
+    fn missing_repo_ref_is_classified_as_skipped_not_failed() {
+        for msg in [
+            "Semgrep SAST requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
+            "Trivy SCA requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
+            "Gitleaks requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
+        ] {
+            assert!(is_skip_message(msg), "'{msg}' must be classified as a skip, not a failure");
+        }
+    }
+
+    /// A `repo_ref` that was actually configured but points at a path that does
+    /// not exist is a real misconfiguration, not the expected "nothing to scan"
+    /// case above — it must keep surfacing as a failure so the analyst notices.
+    #[test]
+    fn a_repo_path_that_does_not_exist_still_fails_loudly() {
+        assert!(!is_skip_message("Trivy: Repository path not found: /no/such/dir"));
+        assert!(!is_skip_message("Gitleaks: Repository path not found: /no/such/dir"));
+    }
+
+    #[test]
+    fn missing_binary_and_auth_gate_denial_are_still_classified_as_skips() {
+        assert!(is_skip_message("semgrep not found on PATH"));
+        assert!(is_skip_message("Trivy binary not found or unreachable."));
+        assert!(is_skip_message("[AUTH GATE BLOCKED] DAST scan on 'x' refused: no RoE"));
     }
 
     /// The native engine is the only one that needs nothing installed and no

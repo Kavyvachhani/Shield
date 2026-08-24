@@ -137,11 +137,18 @@ impl ScannerAdapter for SemgrepAdapter {
         //   semgrep scan
         //     --json                       machine-readable output
         //     --config=p/owasp-top-ten     rule pack (repeated per pack)
-        //     [--lang <lang>]              explicit language if detected
         //     --metrics=off                no telemetry
         //     --no-git-ignore              scan all files
         //     <repo_path>                  target directory
         //
+        // `detected_langs` is logged above but deliberately never becomes a
+        // `--lang`/`-l` flag here: that flag only exists for Semgrep's ad-hoc
+        // `-e/--pattern` single-rule mode. Passed alongside `--config` (rule
+        // packs, which each carry their own per-file language detection) it
+        // is simply invalid usage — Semgrep refuses to run at all: "-e/--pattern
+        // and -l/--lang must both be specified". Since a dominant language is
+        // detected for almost any real repository, this made Semgrep SAST fail
+        // outright on every scan that had actual source code to look at.
         let mut cmd = Command::new("semgrep");
         cmd.arg("scan")
            .arg("--json")
@@ -157,16 +164,12 @@ impl ScannerAdapter for SemgrepAdapter {
             cmd.arg(format!("--config={}", config_val));
         }
 
-        // Add language hint if we detected a dominant language
-        if let Some(lang) = detected_langs.first() {
-            cmd.arg("--lang").arg(lang);
-        }
-
         cmd.arg(repo_path);
 
         tracing::info!(
             repo_path,
             rule_packs = ?rule_packs,
+            detected_langs = ?detected_langs,
             "Semgrep: Launching subprocess"
         );
 
@@ -232,5 +235,56 @@ mod tests {
         let result = adapter.run(&target, "{}").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("repository path"));
+    }
+
+    /// Modern Semgrep rejects `--lang`/`-l` unless paired with the ad-hoc
+    /// `-e/--pattern` mode — passed alongside `--config` (rule packs, which
+    /// each carry their own per-file language detection) it refuses to run at
+    /// all with "-e/--pattern and -l/--lang must both be specified". Since a
+    /// dominant language is auto-detected for nearly any real repository, the
+    /// adapter used to pass exactly that flag and so failed on every scan of
+    /// a repo with actual source code — this test's fixture (a `.ts` file, so
+    /// `detect_languages` returns a non-empty list) reproduces the regression
+    /// if it ever comes back. Skips gracefully when Semgrep is not installed.
+    #[tokio::test]
+    async fn run_succeeds_when_a_dominant_language_is_detected() {
+        if !LocalCliRunner::is_installed("semgrep") {
+            return;
+        }
+
+        let repo_dir = std::env::temp_dir().join(format!("sentinel-semgrep-lang-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        std::fs::write(
+            repo_dir.join("app.ts"),
+            "export function greet(name: string): string {\n  return `Hello, ${name}`;\n}\n",
+        )
+        .unwrap();
+        assert!(
+            !SemgrepAdapter::detect_languages(repo_dir.to_str().unwrap()).is_empty(),
+            "fixture must trigger dominant-language detection to exercise the regression"
+        );
+
+        let adapter = SemgrepAdapter;
+        let target = sentinel_core::models::target::Target {
+            id: uuid::Uuid::new_v4(),
+            project_id: uuid::Uuid::new_v4(),
+            name: "Test".into(),
+            target_type: "Web App".into(),
+            base_url: "http://localhost:3000".into(),
+            repo_ref: Some(repo_dir.to_str().unwrap().to_string()),
+            stack_description: None,
+            auth_keychain_handle: None,
+            authorization_record: None,
+            created_at: chrono::Utc::now(),
+        };
+
+        let result = adapter.run(&target, "{}").await;
+        let _ = std::fs::remove_dir_all(&repo_dir);
+
+        assert!(
+            result.is_ok(),
+            "semgrep must run successfully against a repo with a detected dominant language: {:?}",
+            result.err()
+        );
     }
 }

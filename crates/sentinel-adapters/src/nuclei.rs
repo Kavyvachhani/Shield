@@ -26,6 +26,7 @@ use sentinel_core::{
     parser::nuclei::NucleiJsonlParser,
 };
 use anyhow::{anyhow, Context, Result};
+use std::time::Duration;
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
@@ -33,6 +34,19 @@ use uuid::Uuid;
 // Template tags that are ALWAYS excluded regardless of user configuration.
 // These cover destructive, DoS, and exfiltration-risk template categories.
 const ALWAYS_EXCLUDED_TAGS: &[&str] = &["dos", "fuzzing", "intrusive", "network", "file"];
+
+/// Per-request HTTP timeout passed to nuclei's own `-timeout` flag.
+///
+/// `DastConfig::timeout_seconds` (default 1800s / 30 min) is documented as the
+/// *overall* wall-clock budget for the whole DAST job — that is exactly how
+/// `zap.rs` treats it, dividing it across spider and active-scan phases. This
+/// adapter used to pass that same 1800s straight through as nuclei's
+/// *per-request* timeout instead, so a single unresponsive endpoint — out of
+/// however many thousand templates run with no `-tags` filter — could stall
+/// the entire scan for up to half an hour on that one request alone, with no
+/// visible progress. Nuclei's own CLI default is 10s; that is what a
+/// per-request timeout should actually be.
+const NUCLEI_REQUEST_TIMEOUT_SECS: u64 = 10;
 
 pub struct NucleiDastAdapter;
 
@@ -125,7 +139,7 @@ impl ScannerAdapter for NucleiDastAdapter {
            .arg("-jsonl")
            .arg("-severity").arg(severity)
            .arg("-rl").arg(effective_rps.to_string())
-           .arg("-timeout").arg(cfg.timeout_seconds.to_string())
+           .arg("-timeout").arg(NUCLEI_REQUEST_TIMEOUT_SECS.to_string())
            .arg("-no-interactsh")
            .arg("-silent")
            .arg("-etags").arg(&exclude_tags); // Always applied — non-destructive guarantee
@@ -166,31 +180,66 @@ impl ScannerAdapter for NucleiDastAdapter {
         let stdout = child.stdout.take()
             .ok_or_else(|| anyhow!("Failed to capture nuclei stdout"))?;
 
-        // ── 7. Stream JSONL stdout line-by-line ──────────────────────────────
-        let mut reader = BufReader::new(stdout).lines();
+        // ── 7. Stream JSONL stdout line-by-line, bounded by the job's overall
+        //      wall-clock budget ────────────────────────────────────────────
+        //
+        // A per-request timeout alone does not stop a scan with no `-tags`
+        // filter from simply running every installed template in sequence —
+        // that is legitimate progress, not a hang, but it must not be allowed
+        // to run unbounded. `cfg.timeout_seconds` is the documented budget for
+        // that; previously nothing in this adapter enforced it; the pipeline's
+        // stage timeout (a caller-side concern) was the only backstop.
+        let job_budget = Duration::from_secs(cfg.timeout_seconds.clamp(60, 3600));
         let mut raw_jsonl = String::new();
         let mut line_count = 0usize;
+        let read_result = tokio::time::timeout(job_budget, async {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Some(line) = reader.next_line().await? {
+                if line.trim().is_empty() { continue; }
+                raw_jsonl.push_str(&line);
+                raw_jsonl.push('\n');
+                line_count += 1;
+                tracing::debug!(line_number = line_count, "Nuclei: JSONL line received");
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .await;
 
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() { continue; }
-            raw_jsonl.push_str(&line);
-            raw_jsonl.push('\n');
-            line_count += 1;
-            tracing::debug!(line_number = line_count, "Nuclei: JSONL line received");
+        let timed_out = read_result.is_err();
+        if timed_out {
+            tracing::warn!(
+                budget_secs = job_budget.as_secs(),
+                lines_before_timeout = line_count,
+                "Nuclei: exceeded its wall-clock budget — killing the process and \
+                 reporting whatever templates completed before the deadline"
+            );
+            let _ = child.kill().await;
+        } else {
+            read_result.unwrap().context("failed reading nuclei's JSONL stdout")?;
         }
 
         // ── 8. Wait for exit ─────────────────────────────────────────────────
         let status = child.wait().await
             .context("Nuclei process wait() failed")?;
 
-        if !status.success() && raw_jsonl.is_empty() {
+        if !status.success() && raw_jsonl.is_empty() && !timed_out {
             tracing::warn!(
                 exit_code = status.code().unwrap_or(-1),
                 "Nuclei exited non-zero with no findings (no matching templates or target unreachable)"
             );
         }
 
-        tracing::info!(lines = line_count, target_url, "Nuclei: JSONL stream complete");
+        tracing::info!(lines = line_count, target_url, timed_out, "Nuclei: JSONL stream complete");
+
+        if timed_out && raw_jsonl.is_empty() {
+            return Err(anyhow!(
+                "Nuclei did not complete a single template pass within its {}-second budget \
+                 and produced no output. Narrow the scan with a `-tags` filter (e.g. \
+                 exposure,misconfiguration,tech,cve,default-login,exposed-panels) so it can \
+                 finish in the time available.",
+                job_budget.as_secs()
+            ));
+        }
 
         if raw_jsonl.is_empty() { return Ok(vec![]); }
 
@@ -228,6 +277,23 @@ mod tests {
         let adapter = NucleiDastAdapter;
         let result = adapter.healthcheck().await;
         assert!(result.is_ok());
+    }
+
+    /// `DastConfig::timeout_seconds` (default 1800s) is documented — and used
+    /// by `zap.rs` — as the overall wall-clock budget for the whole DAST job,
+    /// not a per-request timeout. This adapter used to pass it straight
+    /// through to nuclei's own `-timeout` flag, which nuclei applies per
+    /// request: a single unresponsive endpoint could then stall the entire
+    /// scan for up to 30 minutes on that one request. The per-request timeout
+    /// must stay small regardless of how large the job budget is configured.
+    #[test]
+    fn the_per_request_timeout_is_not_the_thirty_minute_job_budget() {
+        let default_job_budget = DastConfig::default().timeout_seconds;
+        assert_eq!(default_job_budget, 1800, "job budget default is documented as 30 minutes");
+        assert!(
+            NUCLEI_REQUEST_TIMEOUT_SECS <= 30,
+            "a per-request timeout of {NUCLEI_REQUEST_TIMEOUT_SECS}s is really the job budget in disguise"
+        );
     }
 
     #[tokio::test]
