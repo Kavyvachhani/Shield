@@ -17,6 +17,7 @@ use crate::state::{
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use sentinel_core::exceptions::ExceptionRecord;
 use sentinel_core::models::finding::Finding;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -80,6 +81,24 @@ CREATE TABLE IF NOT EXISTS reports (
     json        TEXT NOT NULL
 );
 
+-- Analyst decisions that outlive the scan that raised them.
+--
+-- Keyed by id, but the row that matters is (target_id, fingerprint): that pair
+-- is what a fresh scan looks up, which is why it is uniquely indexed. Re-deciding
+-- a weakness replaces the earlier record rather than accumulating contradictory
+-- ones.
+CREATE TABLE IF NOT EXISTS exceptions (
+    id          TEXT PRIMARY KEY,
+    target_id   TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    json        TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exceptions_identity
+    ON exceptions(target_id, fingerprint);
+CREATE INDEX IF NOT EXISTS idx_exceptions_target  ON exceptions(target_id);
 CREATE INDEX IF NOT EXISTS idx_findings_scan   ON findings(scan_id);
 CREATE INDEX IF NOT EXISTS idx_targets_project ON targets(project_id);
 CREATE INDEX IF NOT EXISTS idx_reports_scan    ON reports(scan_id);
@@ -95,6 +114,7 @@ pub struct LoadedState {
     pub scan_engines: Vec<(String, Vec<String>)>,
     pub findings: Vec<(String, StoredFinding)>,
     pub reports: Vec<ReportRecord>,
+    pub exceptions: Vec<ExceptionRecord>,
 }
 
 pub struct Store {
@@ -254,6 +274,40 @@ impl Store {
         Ok(())
     }
 
+    /// Record an exception, replacing any earlier decision on the same weakness.
+    ///
+    /// The conflict target is `(target_id, fingerprint)`, not `id`: a second
+    /// decision about the same weakness is a *revision*, and keeping both would
+    /// leave the register asserting two different things about one finding.
+    pub fn save_exception(&self, r: &ExceptionRecord) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO exceptions (id, target_id, fingerprint, kind, created_at, json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(target_id, fingerprint) DO UPDATE SET
+                 id=excluded.id, kind=excluded.kind,
+                 created_at=excluded.created_at, json=excluded.json",
+            params![
+                r.id,
+                r.target_id,
+                r.fingerprint,
+                format!("{:?}", r.kind),
+                r.created_at.to_rfc3339(),
+                serde_json::to_string(r)?
+            ],
+        )
+        .context("could not record the exception")?;
+        Ok(())
+    }
+
+    /// Withdraw an exception so the weakness returns to the open list.
+    pub fn delete_exception(&self, id: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM exceptions WHERE id = ?1", params![id])
+            .context("could not withdraw the exception")?;
+        Ok(())
+    }
+
     pub fn save_report(&self, r: &ReportRecord) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(
@@ -278,6 +332,7 @@ impl Store {
             targets: query_json(&conn, "SELECT json FROM targets")?,
             scan_runs: query_json(&conn, "SELECT json FROM scan_runs")?,
             reports: query_json(&conn, "SELECT json FROM reports")?,
+            exceptions: query_json(&conn, "SELECT json FROM exceptions")?,
             ..Default::default()
         };
 
@@ -560,6 +615,101 @@ mod tests {
         store.save_project(&project()).unwrap();
         store.save_project(&project()).unwrap();
         assert_eq!(store.load_all().unwrap().projects.len(), 1);
+    }
+
+    fn exception(id: &str, fingerprint: &str, kind: sentinel_core::exceptions::ExceptionKind) -> ExceptionRecord {
+        ExceptionRecord {
+            id: id.into(),
+            target_id: "t1".into(),
+            fingerprint: fingerprint.into(),
+            kind,
+            title: "Directory listing enabled".into(),
+            affected_component: "https://app.test/assets/".into(),
+            severity: sentinel_core::models::finding::Severity::Low,
+            justification: "Static assets only; reviewed and accepted.".into(),
+            raised_by: "R. Mehta".into(),
+            created_at: Utc::now(),
+            expires_at: None,
+        }
+    }
+
+    /// The register only works if it outlives the app. An exception held in
+    /// memory alone would be forgotten on restart, and the analyst would be
+    /// asked about the same false positive on the very next scan.
+    #[test]
+    fn an_exception_survives_a_restart() {
+        use sentinel_core::exceptions::ExceptionKind;
+        let dir = std::env::temp_dir().join(format!("sentinel-exceptions-test-{}", Uuid::new_v4()));
+        let path = dir.join("engagements.db");
+
+        {
+            let store = Store::open(&path).unwrap();
+            store.save_exception(&exception("e1", "fp-aaa", ExceptionKind::FalsePositive)).unwrap();
+        }
+
+        // Dropped and reopened, exactly as an app restart would.
+        let reopened = Store::open(&path).unwrap().load_all().unwrap();
+        assert_eq!(reopened.exceptions.len(), 1);
+        let loaded = &reopened.exceptions[0];
+        assert_eq!(loaded.fingerprint, "fp-aaa");
+        assert_eq!(loaded.kind, ExceptionKind::FalsePositive);
+        assert_eq!(loaded.justification, "Static assets only; reviewed and accepted.");
+        assert_eq!(loaded.raised_by, "R. Mehta", "the audit trail must survive too");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Deciding the same weakness twice is a revision, not a second exception:
+    /// keeping both would leave the register asserting two different things
+    /// about one finding, and the report would have to pick one arbitrarily.
+    #[test]
+    fn re_deciding_a_weakness_replaces_the_earlier_record() {
+        use sentinel_core::exceptions::ExceptionKind;
+        let store = Store::in_memory().unwrap();
+
+        store.save_exception(&exception("e1", "fp-aaa", ExceptionKind::FalsePositive)).unwrap();
+        store.save_exception(&exception("e2", "fp-aaa", ExceptionKind::AcceptedRisk)).unwrap();
+
+        let loaded = store.load_all().unwrap().exceptions;
+        assert_eq!(loaded.len(), 1, "the same weakness must hold exactly one decision");
+        assert_eq!(loaded[0].kind, ExceptionKind::AcceptedRisk, "the later decision wins");
+        assert_eq!(loaded[0].id, "e2");
+    }
+
+    #[test]
+    fn two_different_weaknesses_keep_two_records() {
+        use sentinel_core::exceptions::ExceptionKind;
+        let store = Store::in_memory().unwrap();
+        store.save_exception(&exception("e1", "fp-aaa", ExceptionKind::FalsePositive)).unwrap();
+        store.save_exception(&exception("e2", "fp-bbb", ExceptionKind::FalsePositive)).unwrap();
+        assert_eq!(store.load_all().unwrap().exceptions.len(), 2);
+    }
+
+    /// Withdrawing must actually remove the row: a soft delete would keep
+    /// suppressing the finding on the next scan.
+    #[test]
+    fn withdrawing_an_exception_removes_it_from_disk() {
+        use sentinel_core::exceptions::ExceptionKind;
+        let store = Store::in_memory().unwrap();
+        store.save_exception(&exception("e1", "fp-aaa", ExceptionKind::AcceptedRisk)).unwrap();
+        store.delete_exception("e1").unwrap();
+        assert!(store.load_all().unwrap().exceptions.is_empty());
+    }
+
+    /// A review date is the mechanism that stops "accepted" becoming
+    /// "forgotten", so it has to round-trip intact.
+    #[test]
+    fn a_review_date_round_trips_with_the_record() {
+        use sentinel_core::exceptions::ExceptionKind;
+        let store = Store::in_memory().unwrap();
+        let mut record = exception("e1", "fp-aaa", ExceptionKind::AcceptedRisk);
+        let review = Utc::now() + chrono::Duration::days(90);
+        record.expires_at = Some(review);
+        store.save_exception(&record).unwrap();
+
+        let loaded = &store.load_all().unwrap().exceptions[0];
+        let stored = loaded.expires_at.expect("the review date was lost");
+        assert!((stored - review).num_seconds().abs() < 1);
     }
 
     #[test]

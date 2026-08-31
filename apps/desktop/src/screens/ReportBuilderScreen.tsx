@@ -136,6 +136,12 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
   const [reportType, setReportType] = useState<ReportType>('client');
   const [companyName, setCompanyName] = useState(project.companyName);
   const [analyst, setAnalyst] = useState('');
+  // Document control. These reach the cover table, the classification banner on
+  // every page, and the sign-off block — the parts an auditor reads first to
+  // decide whether the document is a controlled deliverable or a printout.
+  const [reviewedBy, setReviewedBy] = useState('');
+  const [classification, setClassification] = useState('Confidential');
+  const [revision, setRevision] = useState('1.0');
   const [generating, setGenerating] = useState(false);
   const [report, setReport] = useState<GenerateReportOutput | null>(null);
   const [preview, setPreview] = useState(false);
@@ -228,6 +234,9 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
         targetUrl,
         analyst: analyst.trim() || undefined,
         logoDataUri: logo,
+        reviewedBy: reviewedBy.trim() || undefined,
+        classification: classification.trim() || undefined,
+        revision: revision.trim() || undefined,
       };
       setReport(await api.generateReport(input));
     } catch (err) {
@@ -336,6 +345,37 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               style={inputStyle}
             />
           </Field>
+
+          <Field label="Reviewed by (optional)">
+            <input
+              value={reviewedBy}
+              onChange={(e) => setReviewedBy(e.target.value)}
+              placeholder="Second reviewer — shown in document control and sign-off"
+              style={inputStyle}
+            />
+          </Field>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12 }}>
+            <Field label="Classification">
+              <select
+                value={classification}
+                onChange={(e) => setClassification(e.target.value)}
+                style={inputStyle}
+              >
+                {['Confidential', 'Restricted', 'Internal Use Only', 'Commercial in Confidence'].map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Revision">
+              <input
+                value={revision}
+                onChange={(e) => setRevision(e.target.value)}
+                placeholder="1.0"
+                style={inputStyle}
+              />
+            </Field>
+          </div>
 
           <Field label="Company logo (optional)">
             <input

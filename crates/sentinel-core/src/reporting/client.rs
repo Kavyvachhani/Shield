@@ -9,12 +9,14 @@
 use super::charts::{self, Slice};
 use super::escape::{html, html_multiline, image_data_uri};
 use super::{
-    base_stylesheet, footer_html, remediation_window, sort_by_priority, PostureScore,
-    ReportContext, SeverityCounts,
+    base_stylesheet, footer_html, remediation_window, PostureScore, ReportContext, ReportFindings,
+    SeverityCounts,
 };
 use crate::checklist::{CheckStatus, CoverageReport};
+use crate::exceptions::ExceptionRecord;
 use crate::models::finding::{Finding, Severity};
 use crate::scoring::priority::PriorityScoringEngine;
+use chrono::Utc;
 
 /// Render the complete client report as a self-contained HTML document.
 pub fn render(
@@ -22,8 +24,11 @@ pub fn render(
     findings: &[Finding],
     coverage: Option<&CoverageReport>,
 ) -> String {
-    let sorted = sort_by_priority(findings);
-    let counts = SeverityCounts::of(&sorted);
+    // Accepted risks are held out of the live picture: they are disclosed in
+    // their own register with the justification and the owner, rather than
+    // counted as open exposure the client is expected to act on.
+    let split = ReportFindings::partition(findings);
+    let counts = split.counts();
     let posture = PostureScore::compute(&counts, coverage);
 
     format!(
@@ -33,39 +38,102 @@ pub fn render(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security Assessment Report — {company}</title>
-<style>{css}</style>
+<style>{css}{extra_css}</style>
 </head>
 <body>
 <div class="page">
-  <div class="banner">Confidential — prepared for {company}</div>
+  <div class="banner">{classification} — prepared for {company}</div>
   {cover}
+  {contents}
   {summary}
   {posture_section}
   {breakdown}
+  {controls_verified}
   {coverage_section}
   {top_risks}
+  {accepted}
   {roadmap}
   {compliance}
   {methodology}
+  {assurance}
   {scope}
+  {signoff}
   {footer}
 </div>
 </body>
 </html>"##,
         company = html(&ctx.company_name),
+        classification = html(&ctx.classification),
         css = base_stylesheet(),
+        extra_css = extra_stylesheet(),
         cover = cover(ctx),
-        summary = executive_summary(ctx, &counts, &posture, coverage),
+        contents = contents(coverage, &split),
+        summary = executive_summary(ctx, &counts, &posture, coverage, &split),
         posture_section = posture_panel(&posture, &counts),
         breakdown = severity_breakdown(&counts),
+        controls_verified = controls_verified(coverage),
         coverage_section = coverage_section(coverage),
-        top_risks = top_risks(&sorted),
-        roadmap = roadmap(&sorted),
+        top_risks = top_risks(&split.active),
+        accepted = accepted_risk_register(ctx, &split),
+        roadmap = roadmap(&split.active),
         compliance = compliance(&counts, coverage),
         methodology = methodology(ctx),
+        assurance = assurance(ctx, coverage, findings),
         scope = scope_and_attestation(ctx),
+        signoff = signoff(ctx),
         footer = footer_html(ctx, "Security Assessment Report"),
     )
+}
+
+/// Styles used only by this document, appended to the shared sheet.
+fn extra_stylesheet() -> &'static str {
+    r##"
+.toc{columns:2;column-gap:34px;font-size:13px;margin:6px 0 4px}
+.toc div{break-inside:avoid;padding:3px 0;border-bottom:1px dotted var(--line)}
+.toc .n{display:inline-block;width:24px;color:var(--muted);font-variant-numeric:tabular-nums}
+.control{border:1px solid var(--line);border-left:3px solid #16a34a;border-radius:0 8px 8px 0;
+  padding:11px 14px;background:#fbfefc}
+.control h4{font-size:13px;margin:0 0 3px}
+.control .ref{font-size:11px;color:var(--muted);font-family:'Cascadia Mono',Consolas,monospace}
+.tick{color:#16a34a;font-weight:700;margin-right:5px}
+.sign{border:1px solid var(--line);border-radius:9px;padding:16px 18px;background:var(--bg)}
+.sign .line{border-bottom:1px solid #94a3b8;height:34px;margin-top:14px}
+@media print{.toc{columns:2}.control,.sign{page-break-inside:avoid}}
+"##
+}
+
+/// Contents page, so a printed report can be navigated.
+fn contents(coverage: Option<&CoverageReport>, split: &ReportFindings) -> String {
+    let mut entries: Vec<&str> = vec![
+        "Executive Summary",
+        "Findings by Severity",
+    ];
+    if coverage.is_some() {
+        entries.push("Controls Verified — What Is Protecting You");
+        entries.push("Assessment Coverage — Every Check We Performed");
+    }
+    entries.push("Principal Risks");
+    if !split.accepted.is_empty() {
+        entries.push("Accepted Risk Register");
+    }
+    if !split.active.is_empty() {
+        entries.push("Remediation Roadmap");
+    }
+    entries.extend([
+        "Compliance Alignment",
+        "Methodology",
+        "Assurance, Evidence &amp; Limitations",
+        "Scope &amp; Attestation",
+        "Sign-off",
+    ]);
+
+    let items: String = entries
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!(r##"<div><span class="n">{}</span>{name}</div>"##, i + 1))
+        .collect();
+
+    format!(r##"<h2>Contents</h2><div class="toc">{items}</div>"##)
 }
 
 fn cover(ctx: &ReportContext) -> String {
@@ -94,7 +162,11 @@ fn cover(ctx: &ReportContext) -> String {
       <tr><th>Assessment period</th><td>{start} to {end} (UTC)</td></tr>
       <tr><th>Performed by</th><td>{analyst}</td></tr>
       <tr><th>Report reference</th><td>{reference}</td></tr>
-      <tr><th>Classification</th><td>Confidential — restricted to authorised recipients</td></tr>
+      <tr><th>Revision</th><td>{revision} — issued {issued}</td></tr>
+      <tr><th>Reviewed by</th><td>{reviewer}</td></tr>
+      <tr><th>Classification</th><td>{classification} — restricted to authorised recipients</td></tr>
+      <tr><th>Distribution</th><td>{company}, named recipients only. Do not forward without the issuer&#39;s consent.</td></tr>
+      <tr><th>Retention</th><td>Held for the period agreed in the engagement letter, then destroyed.</td></tr>
     </tbody>
   </table>
 </header>"##,
@@ -106,6 +178,10 @@ fn cover(ctx: &ReportContext) -> String {
         end = ctx.assessment_end.format("%d %B %Y"),
         analyst = html(&ctx.analyst),
         reference = html(&ctx.report_reference),
+        revision = html(&ctx.revision),
+        issued = ctx.assessment_end.format("%d %B %Y"),
+        reviewer = html(ctx.reviewed_by.as_deref().unwrap_or("Pending independent review")),
+        classification = html(&ctx.classification),
     )
 }
 
@@ -114,6 +190,7 @@ fn executive_summary(
     counts: &SeverityCounts,
     posture: &PostureScore,
     coverage: Option<&CoverageReport>,
+    split: &ReportFindings,
 ) -> String {
     let checks_line = match coverage {
         Some(c) => format!(
@@ -158,22 +235,53 @@ fn executive_summary(
         String::new()
     };
 
+    // The intro is built first rather than nested inside the outer `format!`,
+    // which clippy rightly flags: a `format!` evaluated as an argument to
+    // another allocates twice and hides the escaping in the middle of a layout.
+    let intro = format!(
+        "This report presents the results of a security assessment of <strong>{target}</strong>, \
+         carried out for {company} under a signed authorisation between {start} and {end}. \
+         Testing was non-destructive throughout: no data was created, modified or removed, and \
+         no availability-affecting technique was used.",
+        target = html(&ctx.target_name),
+        company = html(&ctx.company_name),
+        start = ctx.assessment_start.format("%d %B %Y"),
+        end = ctx.assessment_end.format("%d %B %Y"),
+    );
+
+    // What the client actively decided to carry, stated up front rather than
+    // buried: an executive reading only this page must not mistake a suppressed
+    // count for an absent risk.
+    let accepted_line = if split.accepted.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p>A further <strong>{n} weakness{plural}</strong> {is} formally accepted by {company} \
+             and {is2} therefore excluded from the counts and the score above. {they} remain{s} \
+             disclosed in full in the <em>Accepted Risk Register</em> later in this report, with the \
+             justification recorded for each.</p>",
+            n = split.accepted.len(),
+            plural = if split.accepted.len() == 1 { "" } else { "es" },
+            is = if split.accepted.len() == 1 { "is" } else { "are" },
+            is2 = if split.accepted.len() == 1 { "is" } else { "are" },
+            they = if split.accepted.len() == 1 { "It" } else { "They" },
+            s = if split.accepted.len() == 1 { "s" } else { "" },
+            company = html(&ctx.company_name),
+        )
+    };
+
     format!(
         r##"<h2>Executive Summary</h2>
 <p>{intro}</p>
 <p>{checks}</p>
 <p>{findings}</p>
+{accepted_line}
 <div class="callout"><strong>Overall verdict — {band} ({score:.0}/100).</strong> {verdict}</div>
 {urgency}"##,
-        intro = format!(
-            "This report presents the results of a security assessment of <strong>{}</strong>, \
-             carried out for {} under a signed authorisation. Testing was non-destructive throughout: \
-             no data was modified or removed, and no availability-affecting technique was used.",
-            html(&ctx.target_name),
-            html(&ctx.company_name)
-        ),
+        intro = intro,
         checks = checks_line,
         findings = findings_line,
+        accepted_line = accepted_line,
         band = html(posture.band.label()),
         score = posture.score,
         verdict = posture.band.verdict(),
@@ -234,6 +342,121 @@ fn severity_breakdown(counts: &SeverityCounts) -> String {
         donut = charts::donut(&slices, "FINDINGS"),
         legend = legend,
         bars = charts::horizontal_bars(&slices, 460.0),
+    )
+}
+
+/// What a clean result in each WSTG category actually buys the client.
+///
+/// The coverage matrix answers "was this tested"; a client also needs "and what
+/// does passing it protect me from". Written for the reader who signs the
+/// cheque, not the one who writes the code.
+fn category_assurance(code: &str) -> &'static str {
+    match code {
+        "INFO" => "The application does not volunteer the details an attacker uses to plan an attack — server and framework versions, internal hostnames, source-control metadata, backup files or developer notes left in the page.",
+        "CONF" => "Transport security, security response headers and file exposure are configured as expected. Traffic is encrypted, the browser is instructed to enforce the site's own security rules, and files that belong on a build server are not being served to the internet.",
+        "IDNT" => "Account provisioning and role definitions behave as intended: accounts cannot be enumerated from the outside, and the roles the application defines are the roles it actually enforces.",
+        "ATHN" => "The login path holds up: credentials are transmitted over an encrypted channel, the mechanism resists guessing and replay, and the application does not disclose whether a username exists.",
+        "ATHZ" => "Access control decisions are made on the server. A user cannot reach another user's data or an administrative function by editing a URL, an identifier or a client-side value.",
+        "SESS" => "Sessions are issued, protected and ended correctly. Cookies carry the attributes that stop them being read by scripts, sent over plaintext, or replayed from another site.",
+        "INPV" => "Data supplied by a user is treated as data, not as code. The injection classes that lead to database compromise, script execution in a victim's browser or command execution on the server were exercised and not observed.",
+        "ERRH" => "Failures are handled without disclosing internal detail. Stack traces, SQL fragments and file paths — the material that turns a probe into a working exploit — are not returned to the client.",
+        "CRYP" => "Encryption is applied where it is needed and configured to current standards: valid certificates, modern protocol versions and strong algorithms, with no downgrade to obsolete cryptography.",
+        "BUSL" => "The application's own rules were reviewed for abuse: workflows that can be completed out of order, limits that can be bypassed, and values a user should not be able to influence.",
+        "CLNT" => "Code running in the user's browser does not create a way in. Third-party scripts, cross-origin policy and client-side rendering were reviewed for weaknesses that a server-side review would miss.",
+        "APIT" => "Programmatic interfaces were assessed alongside the web interface, so an endpoint that the browser never calls is not left unexamined.",
+        _ => "The checks in this category were exercised and returned no issue.",
+    }
+}
+
+/// The controls this assessment actively confirmed to be in place.
+///
+/// The coverage matrix further down is exhaustive and therefore long. This
+/// section is the answer to the question a client actually asks — "so what is
+/// protecting us?" — expressed as the specific test cases that passed.
+fn controls_verified(coverage: Option<&CoverageReport>) -> String {
+    let Some(cov) = coverage else {
+        return String::new();
+    };
+
+    let passed: Vec<&crate::checklist::CheckResult> = cov
+        .results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Passed)
+        .collect();
+
+    if passed.is_empty() {
+        return r##"<h2 class="page-break">Controls Verified — What Is Protecting You</h2>
+<div class="warn"><strong>No check completed cleanly in this assessment.</strong> That is a statement about the
+assessment, not about the application: without an engine covering a test case there is no basis on which to
+confirm a control is working. Install the engines listed as unavailable in the coverage table, or arrange a
+manual assessment, before drawing any conclusion about the controls below.</div>"##
+            .to_string();
+    }
+
+    let mut blocks = String::new();
+    for category in &cov.categories {
+        let items: Vec<&&crate::checklist::CheckResult> = passed
+            .iter()
+            .filter(|r| r.category_code == category.category_code)
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+
+        let cards: String = items
+            .iter()
+            .map(|r| {
+                format!(
+                    r##"<div class="control">
+  <h4><span class="tick">&#10003;</span>{name}</h4>
+  <div class="small muted">{summary}</div>
+  <div class="ref">{id} &middot; verified by {engines}</div>
+</div>"##,
+                    name = html(&r.name),
+                    summary = html(&r.client_summary),
+                    id = html(&r.id),
+                    engines = html(&if r.engines_executed.is_empty() {
+                        "the assessment engine".to_string()
+                    } else {
+                        r.engines_executed.join(", ")
+                    }),
+                )
+            })
+            .collect();
+
+        blocks.push_str(&format!(
+            r##"<h3>{name} — {n} of {total} checks passed</h3>
+<p class="small">{assurance}</p>
+<div class="grid grid-2">{cards}</div>"##,
+            name = html(&category.category),
+            n = items.len(),
+            total = category.total,
+            assurance = category_assurance(&category.category_code),
+            cards = cards,
+        ));
+    }
+
+    let engines = if cov.engines_executed.is_empty() {
+        "the built-in check engine".to_string()
+    } else {
+        html(&cov.engines_executed.join(", "))
+    };
+
+    format!(
+        r##"<h2 class="page-break">Controls Verified — What Is Protecting You</h2>
+<p>A security report that lists only what is broken tells you half the story. This section records the
+<strong>{n} test cases that were exercised against {target_desc} and came back clean</strong>: each one is a
+control that was actively examined and found to be doing its job, not an assumption.</p>
+<div class="fix"><strong>How we established this.</strong> Every entry below was tested by {engines} against
+the live application inside the authorised scope. A control is only listed here when an engine capable of
+answering that test case ran and returned no issue — a check nothing could exercise is reported as
+&ldquo;Not tested&rdquo; in the coverage matrix, never as a pass. Evidence for each observation was captured
+and hashed at the time of testing and is retained with the engagement record.</div>
+{blocks}"##,
+        n = passed.len(),
+        target_desc = "the application",
+        engines = engines,
+        blocks = blocks,
     )
 }
 
@@ -432,6 +655,109 @@ the affected component is.</p>
     )
 }
 
+/// The weaknesses the business has formally chosen to carry.
+///
+/// This section is why an exception can safely take a finding out of the score
+/// above. Suppressing a risk without disclosing it would make the report
+/// dishonest; disclosing it here, with who accepted it, why, and when the
+/// decision is due for review, is exactly what an auditor expects to find.
+fn accepted_risk_register(ctx: &ReportContext, split: &ReportFindings) -> String {
+    if split.accepted.is_empty() {
+        return String::new();
+    }
+
+    let now = Utc::now();
+    let register = crate::exceptions::ExceptionRegister::from_records(ctx.exceptions.iter());
+
+    let rows: String = split
+        .accepted
+        .iter()
+        .map(|f| {
+            let record: Option<&ExceptionRecord> = register.covering(f, now);
+            let justification = record
+                .map(|r| html(&r.justification))
+                .unwrap_or_else(|| "Recorded during triage — see the engagement record.".to_string());
+            let owner = record
+                .map(|r| html(&r.raised_by))
+                .unwrap_or_else(|| "Not recorded".to_string());
+            let accepted_on = record
+                .map(|r| r.created_at.format("%d %b %Y").to_string())
+                .unwrap_or_else(|| "—".to_string());
+            let review = match record.and_then(|r| r.expires_at) {
+                Some(when) => {
+                    let days = (when - now).num_days();
+                    let colour = if days <= 30 { "#ea580c" } else { "#334155" };
+                    format!(
+                        r##"<span style="color:{colour};font-weight:600">{}</span><div class="small muted">{days} days</div>"##,
+                        when.format("%d %b %Y")
+                    )
+                }
+                None => r##"<span class="muted">Open-ended</span>"##.to_string(),
+            };
+
+            format!(
+                r##"<tr>
+  <td><strong>{title}</strong><div class="small muted">{component}</div></td>
+  <td style="white-space:nowrap"><span class="pill" style="background:{colour}">{severity}</span></td>
+  <td class="small">{justification}</td>
+  <td class="small" style="white-space:nowrap">{owner}<div class="muted">{accepted_on}</div></td>
+  <td class="small" style="white-space:nowrap">{review}</td>
+</tr>"##,
+                title = html(&f.title),
+                component = html(&f.affected_component),
+                colour = charts::severity_color(&f.severity),
+                severity = charts::severity_name(&f.severity),
+                justification = justification,
+                owner = owner,
+                accepted_on = accepted_on,
+                review = review,
+            )
+        })
+        .collect();
+
+    let lapsing = split
+        .accepted
+        .iter()
+        .filter_map(|f| register.covering(f, now))
+        .filter(|r| r.days_until_expiry(now).is_some_and(|d| d <= 30))
+        .count();
+
+    let due_note = if lapsing > 0 {
+        format!(
+            r##"<div class="warn"><strong>{lapsing} acceptance{p} due for review within 30 days.</strong>
+An acceptance that lapses is not renewed automatically: the weakness returns to the open findings list in the
+next assessment, which is what stops &ldquo;accepted&rdquo; quietly becoming &ldquo;forgotten&rdquo;.</div>"##,
+            p = if lapsing == 1 { "" } else { "s" },
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<h2 class="page-break">Accepted Risk Register</h2>
+<p>The weaknesses below are real and were confirmed during testing. {company} has formally accepted them,
+so they are excluded from the finding counts, the posture score and the remediation roadmap — but they are
+<strong>not</strong> removed from this report. Accepted exposure is disclosed, never deleted.</p>
+<table>
+  <thead><tr>
+    <th>Weakness and location</th>
+    <th style="width:88px">Severity</th>
+    <th style="width:260px">Business justification</th>
+    <th style="width:140px">Accepted by</th>
+    <th style="width:110px">Review due</th>
+  </tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+{due_note}
+<p class="small muted">Each entry remains the accepting party&#39;s risk to own. Should the surrounding
+circumstances change — a new integration, a change of data classification, or public exploitation of the
+weakness class — the acceptance should be revisited ahead of its review date.</p>"##,
+        company = html(&ctx.company_name),
+        rows = rows,
+        due_note = due_note,
+    )
+}
+
 fn roadmap(sorted: &[Finding]) -> String {
     let bands: [(Severity, &str); 4] = [
         (Severity::Critical, "Immediate — within 24 to 48 hours"),
@@ -561,6 +887,139 @@ de-duplicated so the same weakness reported by two tools appears once, and then 
 and known-pattern weaknesses. It cannot fully evaluate business logic, authorisation between user accounts, or
 multi-step workflow abuse — these are marked "Manual review required" in the coverage table and need a human
 analyst. A clean automated result is meaningful evidence of hygiene, not a guarantee that no weakness exists.</div>"##
+    )
+}
+
+/// Evidence handling, standards conformance and the honest limits of the work.
+///
+/// The section an auditor turns to first: it says what the assessment is
+/// evidence *of*, how that evidence can be checked, and what it deliberately
+/// does not cover.
+fn assurance(
+    ctx: &ReportContext,
+    coverage: Option<&CoverageReport>,
+    findings: &[Finding],
+) -> String {
+    let evidence_count: usize = findings.iter().map(|f| f.evidences.len()).sum();
+    let engines = if ctx.engines_executed.is_empty() {
+        "Sentinel Native (built in)".to_string()
+    } else {
+        html(&ctx.engines_executed.join(", "))
+    };
+
+    let unavailable = coverage
+        .map(|c| c.engines_unavailable.clone())
+        .unwrap_or_default();
+    let unavailable_row = if unavailable.is_empty() {
+        r##"<tr><th>Engines unavailable</th><td>None — every engine the catalogue references was present.</td></tr>"##.to_string()
+    } else {
+        format!(
+            r##"<tr><th>Engines unavailable</th><td>{list}<div class="small muted">Test cases relying solely on these engines are reported as &ldquo;Not tested&rdquo;, never as passed.</div></td></tr>"##,
+            list = html(&unavailable.join(", ")),
+        )
+    };
+
+    let coverage_row = coverage
+        .map(|c| {
+            format!(
+                r##"<tr><th>Automated coverage</th><td>{pct:.0}% of the {automatable} automatable test cases in the catalogue were exercised ({exercised} of them returning a definitive result).</td></tr>"##,
+                pct = c.automated_coverage_pct,
+                automatable = c.total_checks - c.manual_required,
+                exercised = c.passed + c.issues_found,
+            )
+        })
+        .unwrap_or_default();
+
+    let dismissed = ctx.active_dismissals().len();
+    let dismissed_row = if dismissed == 0 {
+        String::new()
+    } else {
+        format!(
+            r##"<tr><th>Dismissed as false positive</th><td>{dismissed} observation{p} {were} reviewed by the analyst, judged not to be a genuine weakness, and excluded from this report. The rationale for each is retained on the engagement record and is available on request.</td></tr>"##,
+            p = if dismissed == 1 { "" } else { "s" },
+            were = if dismissed == 1 { "was" } else { "were" },
+        )
+    };
+
+    format!(
+        r##"<h2 class="page-break">Assurance, Evidence &amp; Limitations</h2>
+<p>This section records how the assessment was conducted to a standard that can be reviewed by a third party,
+what evidence exists behind each statement in this report, and what the work does not cover.</p>
+
+<h3>Standards this assessment was conducted against</h3>
+<table>
+  <thead><tr><th style="width:270px">Standard</th><th>How it was applied</th></tr></thead>
+  <tbody>
+    <tr><td><strong>OWASP WSTG v4.2</strong></td><td>Supplied the test-case inventory. Every case in the catalogue is reported with its actual state, including the cases that could not be exercised.</td></tr>
+    <tr><td><strong>OWASP Top 10:2025</strong></td><td>Each finding carries the risk category it belongs to, so results can be rolled up against the framework your programme already tracks.</td></tr>
+    <tr><td><strong>OWASP ASVS v4.0.3</strong></td><td>Used as the reference for the expected state of a control when judging whether an observation is a weakness.</td></tr>
+    <tr><td><strong>NIST SP 800-115</strong></td><td>Planning, discovery, analysis and reporting phases follow the technical-assessment lifecycle it defines.</td></tr>
+    <tr><td><strong>PTES</strong></td><td>Pre-engagement authorisation, scoping and rules of engagement follow the Penetration Testing Execution Standard.</td></tr>
+    <tr><td><strong>CVSS v4.0 (FIRST)</strong></td><td>Severity is computed from a published vector for every finding, not asserted. The vector is printed in the technical report so any score can be recalculated independently.</td></tr>
+    <tr><td><strong>CWE / MITRE</strong></td><td>Each finding is mapped to its weakness class, so remediation can be grouped by root cause rather than by symptom.</td></tr>
+  </tbody>
+</table>
+
+<h3>Evidence and reproducibility</h3>
+<table>
+  <tbody>
+    <tr><th style="width:270px">Evidence artefacts captured</th><td>{evidence_count} — each stored with a SHA-256 content hash taken at the moment of capture, so any later alteration is detectable.</td></tr>
+    <tr><th>Reproduction</th><td>Every finding in the technical report ships with the exact request or location needed to observe it again independently.</td></tr>
+    <tr><th>Engines executed</th><td>{engines}</td></tr>
+    {unavailable_row}
+    {coverage_row}
+    {dismissed_row}
+    <tr><th>Redaction</th><td>Session cookies, authorisation headers and credentials are removed before any evidence reaches this document. No secret material is reproduced in the report.</td></tr>
+    <tr><th>Data handling</th><td>The assessment ran entirely on locally controlled infrastructure. No finding, evidence artefact or credential was transmitted to a third-party service.</td></tr>
+  </tbody>
+</table>
+
+<h3>Limitations of this assessment</h3>
+<div class="warn">
+<p style="margin-bottom:8px"><strong>Read this before treating the result as a clean bill of health.</strong></p>
+<ul style="margin:0;padding-left:20px">
+  <li>The result describes the application <strong>as it was during the testing window</strong>. Later changes to code, configuration, dependencies or infrastructure may introduce weaknesses this assessment could not have seen.</li>
+  <li>Automated testing establishes the absence of <em>known patterns</em>, not the absence of weakness. Business-logic abuse, authorisation between two real user accounts and multi-step workflow manipulation need a human analyst; those cases are marked <em>Manual review required</em> rather than counted as passed.</li>
+  <li>Testing was confined to the authorised scope. Systems, hosts and paths excluded by the Rules of Engagement were not examined and no assertion is made about them.</li>
+  <li>Non-destructive technique was a condition of the engagement. Weaknesses that can only be proven by a destructive or availability-affecting action were not proven, and where such a weakness is suspected it is reported as requiring manual confirmation.</li>
+  <li>This report is not a certification and does not, on its own, discharge a regulatory obligation.</li>
+</ul>
+</div>"##,
+        evidence_count = evidence_count,
+        engines = engines,
+        unavailable_row = unavailable_row,
+        coverage_row = coverage_row,
+        dismissed_row = dismissed_row,
+    )
+}
+
+/// Issuer sign-off block, so the document has an accountable author.
+fn signoff(ctx: &ReportContext) -> String {
+    format!(
+        r##"<h2>Sign-off</h2>
+<p>The assessment described in this report was carried out under the authorisation referenced above, and the
+findings recorded here reflect the evidence gathered during the testing window.</p>
+<div class="grid grid-2">
+  <div class="sign">
+    <div class="small muted" style="letter-spacing:1px;text-transform:uppercase">Prepared by</div>
+    <div class="line"></div>
+    <div style="margin-top:6px"><strong>{analyst}</strong></div>
+    <div class="small muted">Security analyst &middot; {issued}</div>
+  </div>
+  <div class="sign">
+    <div class="small muted" style="letter-spacing:1px;text-transform:uppercase">Reviewed by</div>
+    <div class="line"></div>
+    <div style="margin-top:6px"><strong>{reviewer}</strong></div>
+    <div class="small muted">Quality review &middot; revision {revision}</div>
+  </div>
+</div>
+<p class="small muted" style="margin-top:12px">Questions about any finding, or a request for the underlying
+evidence, should be directed to the preparer named above quoting report reference {reference}.</p>"##,
+        analyst = html(&ctx.analyst),
+        issued = ctx.assessment_end.format("%d %B %Y"),
+        reviewer = html(ctx.reviewed_by.as_deref().unwrap_or("Pending independent review")),
+        revision = html(&ctx.revision),
+        reference = html(&ctx.report_reference),
     )
 }
 
@@ -733,6 +1192,195 @@ mod tests {
         let out = render(&ctx(), &[], None);
         assert!(out.contains("Manual review required"));
         assert!(out.contains("not a guarantee"));
+    }
+
+    // ── Exceptions ──────────────────────────────────────────────────────────
+
+    fn accepted(title: &str, sev: Severity, score: f64) -> (Finding, ExceptionRecord) {
+        let mut f = finding(title, sev, score);
+        f.status = crate::models::finding::FindingStatus::AcceptedRisk;
+        let record = crate::exceptions::from_triage(
+            &f,
+            &crate::models::finding::FindingStatus::AcceptedRisk,
+            "Mitigated by the WAF rule set; scheduled for the Q3 platform upgrade.",
+            "R. Mehta, CISO",
+            None,
+            "EXC-1".into(),
+        )
+        .unwrap();
+        (f, record)
+    }
+
+    /// The whole point of an exception: the client asked for a report that goes
+    /// green once a risk is formally carried, without the risk disappearing.
+    #[test]
+    fn an_accepted_risk_leaves_the_counts_but_not_the_report() {
+        let (f, record) = accepted("Directory listing enabled", Severity::High, 7.4);
+        let mut c = ctx();
+        c.exceptions = vec![record];
+
+        let out = render(&c, &[f], None);
+
+        assert!(out.contains("Accepted Risk Register"));
+        assert!(out.contains("Directory listing enabled"), "the risk is disclosed, not deleted");
+        assert!(out.contains("Mitigated by the WAF rule set"), "with its justification");
+        assert!(out.contains("R. Mehta, CISO"), "and its owner");
+        assert!(
+            out.contains("No actionable weaknesses were identified"),
+            "with the sole finding accepted, the live picture is clean"
+        );
+    }
+
+    #[test]
+    fn accepting_the_only_high_finding_lifts_the_posture_band() {
+        let coverage = ChecklistEngine::assess(
+            &["Sentinel Native".into(), "OWASP ZAP".into(), "Nuclei".into(),
+              "Semgrep".into(), "Trivy".into(), "Gitleaks".into()],
+            &[],
+        );
+        let open = finding("Directory listing enabled", Severity::High, 7.4);
+        let (carried, record) = accepted("Directory listing enabled", Severity::High, 7.4);
+
+        let before = render(&ctx(), &[open], Some(&coverage));
+        let mut c = ctx();
+        c.exceptions = vec![record];
+        let after = render(&c, &[carried], Some(&coverage));
+
+        assert!(before.contains("Needs Improvement") || before.contains("At Risk"));
+        assert!(after.contains("Strong"), "an accepted risk must not hold the score down");
+    }
+
+    #[test]
+    fn an_acceptance_nearing_expiry_is_called_out() {
+        let (mut f, mut record) = accepted("TLS 1.0 accepted", Severity::Medium, 5.9);
+        f.status = crate::models::finding::FindingStatus::AcceptedRisk;
+        record.expires_at = Some(Utc::now() + chrono::Duration::days(14));
+        let mut c = ctx();
+        c.exceptions = vec![record];
+
+        let out = render(&c, &[f], None);
+        assert!(out.contains("due for review within 30 days"));
+        assert!(out.contains("returns to the open findings list"));
+    }
+
+    #[test]
+    fn an_open_ended_acceptance_says_so_rather_than_showing_a_blank() {
+        let (f, record) = accepted("Server banner disclosed", Severity::Low, 2.1);
+        let mut c = ctx();
+        c.exceptions = vec![record];
+        let out = render(&c, &[f], None);
+        assert!(out.contains("Open-ended"));
+        assert!(!out.contains("due for review within 30 days"));
+    }
+
+    #[test]
+    fn no_acceptances_means_no_register_section() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(!out.contains("Accepted Risk Register"));
+    }
+
+    #[test]
+    fn dismissed_observations_are_accounted_for_in_the_assurance_section() {
+        let f = finding("Phantom", Severity::Medium, 5.0);
+        let record = crate::exceptions::from_triage(
+            &f,
+            &crate::models::finding::FindingStatus::FalsePositive,
+            "Matched a fixture file, not shipped code.",
+            "A. Analyst",
+            None,
+            "EXC-2".into(),
+        )
+        .unwrap();
+        let mut c = ctx();
+        c.exceptions = vec![record];
+
+        // The dismissed finding itself never reaches the renderer.
+        let out = render(&c, &[], None);
+        assert!(out.contains("Dismissed as false positive"));
+        assert!(out.contains("available on request"));
+    }
+
+    // ── Assurance, controls and document control ────────────────────────────
+
+    #[test]
+    fn passed_checks_are_presented_as_controls_that_were_verified() {
+        let cov = ChecklistEngine::assess(&["Sentinel Native".into()], &[]);
+        let out = render(&ctx(), &[], Some(&cov));
+        assert!(out.contains("Controls Verified — What Is Protecting You"));
+        assert!(out.contains("How we established this"));
+        assert!(
+            out.contains("checks passed"),
+            "each category states how many of its checks came back clean"
+        );
+        // The plain-language assurance narrative, not just a tick.
+        assert!(out.contains("Transport security, security response headers"));
+    }
+
+    /// A pass has to mean an engine actually answered the question.
+    #[test]
+    fn nothing_is_claimed_as_verified_when_no_engine_ran() {
+        let cov = ChecklistEngine::assess(&[], &[]);
+        let out = render(&ctx(), &[], Some(&cov));
+        assert!(out.contains("No check completed cleanly in this assessment"));
+        assert!(out.contains("statement about the\nassessment"));
+    }
+
+    #[test]
+    fn the_assurance_section_names_the_standards_and_the_evidence() {
+        let mut f = finding("XSS", Severity::High, 8.0);
+        f.evidences = vec![crate::models::finding::Evidence {
+            evidence_type: "http_response".into(),
+            title: "Response".into(),
+            content: "HTTP/1.1 200 OK".into(),
+            hash: "abc".into(),
+        }];
+        let out = render(&ctx(), &[f], None);
+        for standard in ["OWASP WSTG v4.2", "NIST SP 800-115", "PTES", "CVSS v4.0", "ASVS"] {
+            assert!(out.contains(standard), "the assurance table must cite {standard}");
+        }
+        assert!(out.contains("SHA-256 content hash"));
+        assert!(out.contains("Limitations of this assessment"));
+        assert!(out.contains("not a certification"));
+    }
+
+    #[test]
+    fn the_cover_carries_document_control_and_the_report_is_signed_off() {
+        let mut c = ctx();
+        c.reviewed_by = Some("D. Shah, Principal Consultant".into());
+        c.revision = "2.1".into();
+        let out = render(&c, &[], None);
+        assert!(out.contains("Revision"));
+        assert!(out.contains("2.1"));
+        assert!(out.contains("D. Shah, Principal Consultant"));
+        assert!(out.contains("Distribution"));
+        assert!(out.contains("Sign-off"));
+        assert!(out.contains("Prepared by"));
+    }
+
+    #[test]
+    fn an_unreviewed_report_says_so_rather_than_leaving_it_blank() {
+        let out = render(&ctx(), &[], None);
+        assert!(out.contains("Pending independent review"));
+    }
+
+    #[test]
+    fn the_contents_page_lists_only_the_sections_that_are_present() {
+        let cov = ChecklistEngine::assess(&["Sentinel Native".into()], &[]);
+        let with_coverage = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], Some(&cov));
+        assert!(with_coverage.contains("Contents"));
+        assert!(with_coverage.contains("Controls Verified"));
+
+        let without = render(&ctx(), &[], None);
+        assert!(!without.contains(">Assessment Coverage"), "no coverage, no coverage entry");
+    }
+
+    #[test]
+    fn a_custom_classification_reaches_the_banner_and_the_cover() {
+        let mut c = ctx();
+        c.classification = "Restricted".into();
+        let out = render(&c, &[], None);
+        assert!(out.contains("Restricted — prepared for"));
+        assert!(!out.contains("Confidential — prepared for"));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 
 use chrono::{Duration, Utc};
 use sentinel_core::checklist::ChecklistEngine;
+use sentinel_core::exceptions::{self, ExceptionKind};
 use sentinel_core::models::finding::{
     AITriage, CVSS4Data, EPSSData, Evidence, Finding, FindingStatus, Severity,
 };
@@ -16,17 +17,24 @@ use uuid::Uuid;
 /// A 2x1 PNG, enough to prove the logo pipeline embeds and renders an image.
 const LOGO: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4nGP8z8Dwn4GBgYEJRIAAIm0DwZbvXWEAAAAASUVORK5CYII=";
 
-fn finding(
-    title: &str,
+/// The nine fields that distinguish one sample finding from the next.
+///
+/// Passed as a struct rather than nine positional arguments: at that width a
+/// call site is unreadable and a transposed `&str` pair compiles silently.
+struct Sample<'a> {
+    title: &'a str,
     severity: Severity,
     cvss: f64,
-    cwe: &str,
-    owasp: &str,
-    wstg: &str,
-    component: &str,
+    cwe: &'a str,
+    owasp: &'a str,
+    wstg: &'a str,
+    component: &'a str,
     kev: bool,
     epss: f64,
-) -> Finding {
+}
+
+fn finding(sample: Sample<'_>) -> Finding {
+    let Sample { title, severity, cvss, cwe, owasp, wstg, component, kev, epss } = sample;
     let label = match severity {
         Severity::Critical => "Critical",
         Severity::High => "High",
@@ -105,28 +113,129 @@ fn main() {
     std::fs::create_dir_all(&out).expect("output directory");
 
     let findings = vec![
-        finding("SQL injection in the customer search parameter", Severity::Critical, 9.3,
-                "CWE-89", "A03:2025-Injection", "WSTG-INPV-05",
-                "https://dev.example.com/api/customers?q=", true, 0.94),
-        finding("Session cookie missing the Secure and HttpOnly flags", Severity::High, 7.5,
-                "CWE-614", "A05:2025-Security Misconfiguration", "WSTG-SESS-02",
-                "https://dev.example.com/login", false, 0.21),
-        finding("Reflected cross-site scripting in the error page", Severity::High, 7.1,
-                "CWE-79", "A03:2025-Injection", "WSTG-INPV-01",
-                "https://dev.example.com/error?msg=", false, 0.44),
-        finding("Content-Security-Policy header not set", Severity::Medium, 5.3,
-                "CWE-693", "A05:2025-Security Misconfiguration", "WSTG-CONF-12",
-                "https://dev.example.com/", false, 0.07),
-        finding("TLS 1.0 and 1.1 still accepted", Severity::Medium, 5.9,
-                "CWE-327", "A02:2025-Cryptographic Failures", "WSTG-CRYP-01",
-                "dev.example.com:443", false, 0.03),
-        finding("Directory listing enabled on the assets path", Severity::Low, 3.7,
-                "CWE-548", "A05:2025-Security Misconfiguration", "WSTG-CONF-04",
-                "https://dev.example.com/assets/", false, 0.01),
-        finding("Server version disclosed in response headers", Severity::Info, 0.0,
-                "CWE-200", "A05:2025-Security Misconfiguration", "WSTG-INFO-02",
-                "https://dev.example.com/", false, 0.00),
+        finding(Sample {
+            title: "SQL injection in the customer search parameter",
+            severity: Severity::Critical,
+            cvss: 9.3,
+            cwe: "CWE-89",
+            owasp: "A03:2025-Injection",
+            wstg: "WSTG-INPV-05",
+            component: "https://dev.example.com/api/customers?q=",
+            kev: true,
+            epss: 0.94,
+        }),
+        finding(Sample {
+            title: "Session cookie missing the Secure and HttpOnly flags",
+            severity: Severity::High,
+            cvss: 7.5,
+            cwe: "CWE-614",
+            owasp: "A05:2025-Security Misconfiguration",
+            wstg: "WSTG-SESS-02",
+            component: "https://dev.example.com/login",
+            kev: false,
+            epss: 0.21,
+        }),
+        finding(Sample {
+            title: "Reflected cross-site scripting in the error page",
+            severity: Severity::High,
+            cvss: 7.1,
+            cwe: "CWE-79",
+            owasp: "A03:2025-Injection",
+            wstg: "WSTG-INPV-01",
+            component: "https://dev.example.com/error?msg=",
+            kev: false,
+            epss: 0.44,
+        }),
+        finding(Sample {
+            title: "Content-Security-Policy header not set",
+            severity: Severity::Medium,
+            cvss: 5.3,
+            cwe: "CWE-693",
+            owasp: "A05:2025-Security Misconfiguration",
+            wstg: "WSTG-CONF-12",
+            component: "https://dev.example.com/",
+            kev: false,
+            epss: 0.07,
+        }),
+        finding(Sample {
+            title: "TLS 1.0 and 1.1 still accepted",
+            severity: Severity::Medium,
+            cvss: 5.9,
+            cwe: "CWE-327",
+            owasp: "A02:2025-Cryptographic Failures",
+            wstg: "WSTG-CRYP-01",
+            component: "dev.example.com:443",
+            kev: false,
+            epss: 0.03,
+        }),
+        finding(Sample {
+            title: "Directory listing enabled on the assets path",
+            severity: Severity::Low,
+            cvss: 3.7,
+            cwe: "CWE-548",
+            owasp: "A05:2025-Security Misconfiguration",
+            wstg: "WSTG-CONF-04",
+            component: "https://dev.example.com/assets/",
+            kev: false,
+            epss: 0.01,
+        }),
+        finding(Sample {
+            title: "Server version disclosed in response headers",
+            severity: Severity::Info,
+            cvss: 0.0,
+            cwe: "CWE-200",
+            owasp: "A05:2025-Security Misconfiguration",
+            wstg: "WSTG-INFO-02",
+            component: "https://dev.example.com/",
+            kev: false,
+            epss: 0.00,
+        }),
     ];
+
+    // Two of the findings carry a decision, so the sample exercises the paths a
+    // real engagement will: an accepted risk that must be disclosed in its own
+    // register rather than counted as open exposure, and a dismissal that must
+    // be accounted for in the assurance section without the finding itself
+    // appearing anywhere.
+    let mut findings = findings;
+    let accepted_index = findings
+        .iter()
+        .position(|f| f.title.starts_with("Directory listing"))
+        .expect("the sample set contains the directory-listing finding");
+    findings[accepted_index].status = FindingStatus::AcceptedRisk;
+
+    let accepted = exceptions::from_triage(
+        &findings[accepted_index],
+        &FindingStatus::AcceptedRisk,
+        "Static build artefacts only; the directory holds no customer data. Scheduled to move \
+         behind the CDN in the Q3 platform migration.",
+        "R. Mehta, Head of Engineering",
+        Some(Utc::now() + Duration::days(75)),
+        "EXC-2026-014".into(),
+    )
+    .expect("an accepted risk creates an exception");
+
+    let dismissed_source = finding(Sample {
+        title: "Hardcoded credential in build fixture",
+        severity: Severity::High,
+        cvss: 7.8,
+        cwe: "CWE-798",
+        owasp: "A04:2025-Cryptographic Failures",
+        wstg: "WSTG-INFO-05",
+        component: "tests/fixtures/seed_users.json",
+        kev: false,
+        epss: 0.02,
+    });
+    let dismissed = exceptions::from_triage(
+        &dismissed_source,
+        &FindingStatus::FalsePositive,
+        "Test fixture, never bundled into a release artefact. Verified against the build manifest.",
+        "A. Iyer, Security Analyst",
+        None,
+        "EXC-2026-011".into(),
+    )
+    .expect("a dismissal creates an exception");
+    debug_assert_eq!(dismissed.kind, ExceptionKind::FalsePositive);
 
     let engines = vec!["Sentinel Native".to_string(), "OWASP ZAP".to_string()];
     let coverage = ChecklistEngine::assess(&engines, &findings);
@@ -145,6 +254,10 @@ fn main() {
     ctx.roe_hash = Some("9f2c1a77b4e05d3a8c6e1b0f4d7a2938e5c1b6a0".into());
     ctx.assessment_start = Utc::now() - Duration::days(3);
     ctx.assessment_end = Utc::now();
+    ctx.reviewed_by = Some("D. Shah, Principal Consultant".into());
+    ctx.classification = "Commercial in Confidence".into();
+    ctx.revision = "1.0".into();
+    ctx.exceptions = vec![accepted, dismissed];
 
     let client = ReportEngine::client_report(&ctx, &findings, Some(&coverage));
     let developer = ReportEngine::developer_report(&ctx, &findings, Some(&coverage));
@@ -153,6 +266,7 @@ fn main() {
     std::fs::write(out.join("developer-report.html"), &developer).unwrap();
 
     println!("findings      : {}", findings.len());
+    println!("exceptions    : {}", ctx.exceptions.len());
     println!("client   bytes: {}", client.len());
     println!("developer bytes: {}", developer.len());
     println!("logo in client   : {}", client.contains(LOGO));

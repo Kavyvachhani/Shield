@@ -290,10 +290,12 @@ mod tests {
     fn the_per_request_timeout_is_not_the_thirty_minute_job_budget() {
         let default_job_budget = DastConfig::default().timeout_seconds;
         assert_eq!(default_job_budget, 1800, "job budget default is documented as 30 minutes");
-        assert!(
-            NUCLEI_REQUEST_TIMEOUT_SECS <= 30,
-            "a per-request timeout of {NUCLEI_REQUEST_TIMEOUT_SECS}s is really the job budget in disguise"
-        );
+        const {
+            assert!(
+                NUCLEI_REQUEST_TIMEOUT_SECS <= 30,
+                "a per-request timeout of 30s or more is really the job budget in disguise"
+            )
+        };
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
+use sentinel_core::exceptions::ExceptionRecord;
 use sentinel_core::models::finding::{Finding as CoreFinding, FindingStatus};
 
 // ── Domain models mirrored for in-process state ──────────────────────────────
@@ -119,6 +120,9 @@ pub struct FindingRecord {
     pub source_tools: Vec<String>,
     pub triage_note: Option<String>,
     pub priority_rationale: String,
+    /// Stable identity of this weakness across scans, so the UI can show which
+    /// rows are covered by a standing exception.
+    pub fingerprint: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -158,6 +162,7 @@ pub fn to_record(
         source_tools: f.source_tools.clone(),
         triage_note,
         priority_rationale: f.priority_rationale.clone(),
+        fingerprint: sentinel_core::exceptions::fingerprint(f),
         created_at: f.created_at,
     }
 }
@@ -216,6 +221,12 @@ pub struct AppState {
     /// so a skipped stage must never be recorded here.
     pub scan_engines: Arc<RwLock<HashMap<String, Vec<String>>>>,
     pub reports: Arc<RwLock<HashMap<String, ReportRecord>>>,
+    /// The exception register, keyed by exception id.
+    ///
+    /// Held against the *target* rather than a scan, which is the whole point:
+    /// a decision the analyst took on one scan has to still hold on the next
+    /// one, where every finding id has changed.
+    pub exceptions: Arc<RwLock<HashMap<String, ExceptionRecord>>>,
     /// Active scan task handles: scan_run_id → abort handle
     pub active_scans: Arc<RwLock<HashMap<String, tokio::task::AbortHandle>>>,
     /// Durable storage. Every mutation is written through so an engagement —
@@ -252,6 +263,9 @@ impl AppState {
             scan_engines: Arc::new(RwLock::new(loaded.scan_engines.into_iter().collect())),
             reports: Arc::new(RwLock::new(
                 loaded.reports.into_iter().map(|r| (r.id.clone(), r)).collect(),
+            )),
+            exceptions: Arc::new(RwLock::new(
+                loaded.exceptions.into_iter().map(|e| (e.id.clone(), e)).collect(),
             )),
             active_scans: Arc::new(RwLock::new(HashMap::new())),
             store: Arc::new(store),

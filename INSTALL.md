@@ -102,7 +102,7 @@ coverage further.
 
 | Engine | Type | Ships with the app? | Install |
 |---|---|---|---|
-| **Sentinel Native** | Headers, TLS, cookies, CORS, exposure, content | ✅ Built in | — |
+| **Sentinel Native** | 55 checks: headers, TLS, cookies, cross-origin isolation, CORS, exposure, content, information disclosure | ✅ Built in | — |
 | **Semgrep** | SAST — source code | No | `pip install semgrep` |
 | **Trivy** | SCA — dependency CVEs | No | `winget install AquaSecurity.Trivy` · `brew install trivy` |
 | **Gitleaks** | Secret detection | No | `winget install Gitleaks.Gitleaks` · `brew install gitleaks` |
@@ -163,7 +163,16 @@ generate activity in that account's audit log.
 3. **Scan Console** — start the pipeline and watch stages stream live. Missing
    scanners are skipped with an explanation rather than failing the run.
 4. **Findings** — review findings ranked by priority score
-   (CVSS 4.0 × EPSS × CISA KEV × reachability × exposure), filter, and triage.
+   (CVSS 4.0 × EPSS × CISA KEV × reachability × exposure), filter, and triage. Each
+   finding shows a validation confidence: what it was determined from, and the
+   condition that would make it a false positive.
+
+   Marking a finding **False Positive** or **Accepted Risk** records an exception
+   against the target. It is applied automatically to every later scan, so the same
+   weakness is triaged once rather than once per run — press **Exceptions** in the
+   filter bar to see the register, and **Withdraw** to put a weakness back in the
+   queue. An acceptance can carry a review date; when it passes, the exception lapses
+   and the finding returns to the open list on the next scan.
 5. **Coverage** — see every WSTG test case and its result, including checks that
    passed and those still needing manual analysis.
 6. **Reports** — generate and export the deliverables.
@@ -174,8 +183,8 @@ generate activity in that account's audit log.
 
 | Deliverable | Audience | Contents |
 |---|---|---|
-| **Client Report** | Business owners | Posture score, plain-language risks, remediation roadmap with timeframes, compliance alignment, and the full coverage matrix showing every check performed |
-| **Developer Report** | Engineers | One section per finding: location, CVSS 4.0 vector, CWE/OWASP/WSTG mapping, reproduction steps, sanitized evidence, the fix and how to verify it |
+| **Client Report** | Business owners, auditors | Document control and sign-off, posture score, the controls that were verified and what each protects against, plain-language risks, the accepted-risk register, remediation roadmap with timeframes, compliance alignment, standards conformance and evidence handling, a stated limitations section, and the full coverage matrix showing every check performed |
+| **Developer Report** | Engineers | A false-positive handling guide, then one section per finding: location, CVSS 4.0 vector, CWE/OWASP/WSTG mapping, validation confidence and what would make it wrong, reproduction steps, sanitized evidence, the fix and how to verify it. Closes with the accepted risks and the dismissals, so nothing is suppressed silently |
 | **Markdown** | Issue trackers | The developer report as Markdown — paste into Jira, Linear or GitHub |
 | **SARIF 2.1.0** | CI/CD | For GitHub code scanning and other SARIF consumers |
 | **JSON** | Archival | Complete assessment data including the coverage matrix |

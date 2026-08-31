@@ -5,6 +5,9 @@ import {
   AlertOctagon, FileBarChart2, ChevronRight, ListChecks,
 } from 'lucide-react';
 import type { Project, Target, AuthorizationRecord } from './types';
+// The product mark itself, not a generic shield glyph — the window chrome, the
+// taskbar icon and the installer should all show the same thing.
+import brandMark from './assets/hero.png';
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen';
 import { AuthGateScreen } from './screens/AuthGateScreen';
 import { ScanConsoleScreen } from './screens/ScanConsoleScreen';
@@ -73,9 +76,13 @@ export function App() {
         flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ padding: '6px', background: 'rgba(34,211,238,0.1)', borderRadius: 8, border: '1px solid rgba(34,211,238,0.15)' }}>
-            <Shield size={16} style={{ color: 'var(--cyan)' }} />
-          </div>
+          <img
+            src={brandMark}
+            alt=""
+            width={30}
+            height={30}
+            style={{ borderRadius: 8, display: 'block', objectFit: 'cover' }}
+          />
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>SentinelVAPT</div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>Local Engine • Offline • v{version}</div>

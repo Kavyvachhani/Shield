@@ -154,21 +154,26 @@ short-lived, and exchange it for a cookie-based session immediately on use.",
 
 const AUTOCOMPLETE_ON: CheckSpec = CheckSpec {
     id: "NATIVE-PASSWORD-AUTOCOMPLETE",
-    title: "Password Field Permits Autocomplete on a Shared-Use Form",
+    title: "Password Field Explicitly Opts Into Stored-Value Autocomplete",
     cvss_vector: "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
     cwe: "CWE-522",
     wstg: "WSTG-ATHN-05",
     owasp_2025: OWASP_CRYPTO,
     api_top10: None,
-    description: "A password field does not set `autocomplete=\"off\"` or an equivalent value. On a shared \
-or kiosk device the browser may store and later replay the credential for the next person to use the machine. \
-Note that this is a low-priority observation: browser password managers are generally a net security benefit, \
-and modern browsers ignore autocomplete=\"off\" on login forms deliberately.",
-    remediation: "For ordinary login forms, no change is recommended — password managers encourage stronger, \
-unique passwords. Set `autocomplete=\"new-password\"` on password-change fields, and consider \
-`autocomplete=\"off\"` only on forms specifically intended for shared or kiosk devices.",
+    description: "A password input sets `autocomplete=\"on\"`, which asks the browser to offer previously \
+stored passwords in this field. Where the field is collecting a *new* password — a registration or \
+password-change form — that actively encourages the user to re-enter a credential they already use \
+elsewhere, which is the reuse the form exists to prevent. On a shared or kiosk device it also makes the \
+stored value available to the next person at the machine.\n\nThe absence of an autocomplete attribute is \
+NOT reported: browser password managers are a net security gain, modern browsers ignore \
+`autocomplete=\"off\"` on login forms, and flagging the default state produced a finding on virtually every \
+login page assessed.",
+    remediation: "Set `autocomplete=\"new-password\"` on registration and password-change fields, and \
+`autocomplete=\"current-password\"` on the login field. Both are more specific than `on` and let a password \
+manager behave correctly. Reserve `autocomplete=\"off\"` for forms genuinely intended for shared devices.",
     references: &[
         "https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/04-Authentication_Testing/05-Testing_for_Vulnerable_Remember_Password",
+        "https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/autocomplete",
     ],
 };
 
@@ -303,7 +308,7 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
     if has_autocompletable_password_field(body) {
         findings.push(make(
             &AUTOCOMPLETE_ON,
-            "A password input does not declare an autocomplete attribute.".into(),
+            "A password input sets autocomplete=\"on\", asking the browser to offer stored passwords.".into(),
             vec![format!("curl -sS {url} | grep -iE 'type=\"password\"'")],
             truncate(&extract_around(body, "type=\"password\"", 200), 300),
         ));
@@ -320,6 +325,18 @@ fn is_html(resp: &ProbeResponse) -> bool {
         .unwrap_or(false)
 }
 
+/// Markers that only appear in genuine debug output.
+///
+/// Two earlier entries were removed because they matched ordinary pages rather
+/// than tracebacks, and each one raised a finding on most sites the engine saw:
+///
+/// * `node_modules/` appears in the `sourceMappingURL` comment and the vendor
+///   chunk names of essentially every bundled JavaScript application. It is a
+///   build artefact, not a leaked stack frame.
+/// * `ora-0` was intended to catch Oracle `ORA-0xxxx` codes but is a substring
+///   of ordinary words — "aurora-01", "fedora-0" — and matched them
+///   case-insensitively. The Oracle codes are caught by `ORA-0` with its digits,
+///   below, which cannot occur by accident in prose.
 const STACK_TRACE_MARKERS: &[&str] = &[
     "traceback (most recent call last)",
     "stack trace:",
@@ -332,12 +349,29 @@ const STACK_TRACE_MARKERS: &[&str] = &[
     "django.core.exceptions",
     "fatal error: uncaught",
     "warning: mysql_",
-    "ora-0",
     "microsoft ole db provider",
     "unhandled exception",
     ".php on line",
-    "node_modules/",
+    "call stack:",
+    "psycopg2.errors",
+    "system.data.sqlclient",
 ];
+
+/// Oracle error codes, matched case-sensitively on the full `ORA-` prefix plus
+/// five digits so they cannot be produced by ordinary words.
+fn detect_oracle_error(body: &str) -> Option<&'static str> {
+    let bytes = body.as_bytes();
+    for (i, window) in bytes.windows(4).enumerate() {
+        if window != b"ORA-" {
+            continue;
+        }
+        let digits = bytes[i + 4..].iter().take(5).filter(|b| b.is_ascii_digit()).count();
+        if digits == 5 {
+            return Some("ORA-");
+        }
+    }
+    None
+}
 
 /// Return the first stack-trace marker present in the body.
 pub fn detect_stack_trace(body: &str) -> Option<&'static str> {
@@ -346,6 +380,7 @@ pub fn detect_stack_trace(body: &str) -> Option<&'static str> {
         .iter()
         .find(|marker| lower.contains(**marker))
         .copied()
+        .or_else(|| detect_oracle_error(body))
 }
 
 /// Active subresources (script/iframe/link-stylesheet) loaded over plaintext HTTP.
@@ -440,7 +475,11 @@ pub fn find_unsafe_blank_links(body: &str) -> Vec<String> {
         if !lower.contains("target=\"_blank\"") && !lower.contains("target='_blank'") {
             continue;
         }
-        if lower.contains("noopener") {
+        // `noreferrer` implies `noopener` in every browser that supports it, so
+        // a link carrying only `rel="noreferrer"` is protected. Matching on
+        // "noopener" alone reported those as vulnerable — a false positive on
+        // exactly the links a careful developer had already handled.
+        if lower.contains("noopener") || lower.contains("noreferrer") {
             continue;
         }
         // Only external destinations carry the risk.
@@ -454,10 +493,18 @@ pub fn find_unsafe_blank_links(body: &str) -> Vec<String> {
     found
 }
 
+/// Words that make an HTML comment worth reporting.
+///
+/// `hack` was removed: it is a substring of "hackathon", "growth hacking" and
+/// any URL containing the word, and it raised a finding on marketing pages with
+/// nothing sensitive in them at all. The remaining entries either name a secret
+/// directly or are developer shorthand that does not occur in customer-facing
+/// copy.
 const COMMENT_MARKERS: &[&str] = &[
-    "password", "passwd", "secret", "api_key", "apikey", "api key", "token",
-    "todo: remove", "fixme", "hack", "backdoor", "disabled security",
+    "password", "passwd", "secret", "api_key", "apikey", "api key",
+    "todo: remove", "fixme", "backdoor", "disabled security",
     "internal only", "do not deploy", "credential", "private key", "bearer ",
+    "auth_token", "access_token", "connectionstring", "begin rsa",
 ];
 
 /// HTML comments referencing sensitive material.
@@ -502,12 +549,25 @@ pub fn detect_session_in_url(url: &str) -> Option<String> {
     None
 }
 
-/// A password input with no autocomplete attribute at all.
+/// A password input that explicitly opts into unrestricted autocomplete.
+///
+/// This used to fire whenever a password field carried no `autocomplete`
+/// attribute — which is the normal, recommended state of a login form, so it
+/// raised a finding on virtually every application assessed. Browser vendors
+/// and OWASP both now treat a managed password as a net security gain, and
+/// modern browsers ignore `autocomplete="off"` on login forms outright.
+///
+/// What remains genuinely worth reporting is the opposite case: a field that
+/// asks for a *new* or otherwise sensitive password and explicitly sets
+/// `autocomplete="on"`, which tells the browser to offer previously stored
+/// values in a context where reuse is exactly what the form is trying to avoid.
 pub fn has_autocompletable_password_field(body: &str) -> bool {
     extract_tags(body, &["input"]).iter().any(|tag| {
         let lower = tag.to_lowercase();
-        (lower.contains("type=\"password\"") || lower.contains("type='password'"))
-            && !lower.contains("autocomplete=")
+        let is_password =
+            lower.contains("type=\"password\"") || lower.contains("type='password'");
+        let opts_in = lower.contains("autocomplete=\"on\"") || lower.contains("autocomplete='on'");
+        is_password && opts_in
     })
 }
 
@@ -716,12 +776,78 @@ mod tests {
         assert!(detect_session_in_url("https://app.test/p?sid=").is_none());
     }
 
+    /// The old rule fired on the *absence* of the attribute, which is the normal
+    /// and recommended state of a login form — so it raised a finding on nearly
+    /// every application assessed. Only the explicit opt-in is reported now.
     #[test]
-    fn autocomplete_detection_respects_the_attribute() {
-        assert!(has_autocompletable_password_field(r#"<input type="password" name="p">"#));
-        assert!(!has_autocompletable_password_field(
-            r#"<input type="password" autocomplete="new-password">"#
+    fn only_an_explicit_autocomplete_on_is_reported() {
+        assert!(has_autocompletable_password_field(
+            r#"<input type="password" autocomplete="on">"#
         ));
+        assert!(has_autocompletable_password_field(
+            r#"<input type='password' autocomplete='on'>"#
+        ));
+
+        for benign in [
+            r#"<input type="password" name="p">"#,
+            r#"<input type="password" autocomplete="new-password">"#,
+            r#"<input type="password" autocomplete="current-password">"#,
+            r#"<input type="password" autocomplete="off">"#,
+        ] {
+            assert!(
+                !has_autocompletable_password_field(benign),
+                "must not report {benign}"
+            );
+        }
+    }
+
+    /// `rel="noreferrer"` implies `noopener`, so a link carrying only that was
+    /// protected all along and must not be reported.
+    #[test]
+    fn noreferrer_alone_protects_a_blank_target_link() {
+        assert!(find_unsafe_blank_links(
+            r#"<a href="https://other.test/" target="_blank" rel="noreferrer">x</a>"#
+        )
+        .is_empty());
+        assert!(find_unsafe_blank_links(
+            r#"<a href="https://other.test/" target="_blank" rel="noopener noreferrer">x</a>"#
+        )
+        .is_empty());
+        // Still caught when neither is present.
+        assert_eq!(
+            find_unsafe_blank_links(r#"<a href="https://other.test/" target="_blank">x</a>"#).len(),
+            1
+        );
+    }
+
+    /// Both markers matched ordinary production pages and raised a stack-trace
+    /// finding on sites that had never leaked one.
+    #[test]
+    fn bundler_paths_and_ordinary_words_are_not_stack_traces() {
+        assert!(detect_stack_trace("//# sourceMappingURL=/static/node_modules/react/index.js.map").is_none());
+        assert!(detect_stack_trace("<h1>Welcome to Aurora-01</h1>").is_none());
+        assert!(detect_stack_trace("Fedora-05 release notes").is_none());
+    }
+
+    /// A real Oracle code still has to be caught.
+    #[test]
+    fn a_genuine_oracle_error_code_is_still_detected() {
+        assert_eq!(
+            detect_stack_trace("ORA-01722: invalid number"),
+            Some("ORA-")
+        );
+        assert!(detect_stack_trace("ora-01722 lowercase prose").is_none());
+    }
+
+    #[test]
+    fn marketing_copy_mentioning_hacking_is_not_a_leaked_comment() {
+        assert!(find_sensitive_comments("<!-- our growth hacking playbook -->").is_empty());
+        assert!(find_sensitive_comments("<!-- see /blog/hackathon-2024 -->").is_empty());
+        // A genuinely sensitive comment still reports.
+        assert_eq!(
+            find_sensitive_comments("<!-- api_key=AKIA1234 -->").len(),
+            1
+        );
     }
 
     #[test]

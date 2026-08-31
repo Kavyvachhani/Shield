@@ -21,7 +21,8 @@ pub mod developer;
 pub mod escape;
 
 use crate::checklist::CoverageReport;
-use crate::models::finding::{Finding, Severity};
+use crate::exceptions::ExceptionRecord;
+use crate::models::finding::{Finding, FindingStatus, Severity};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,29 @@ pub struct ReportContext {
     /// SHA-256 of the signed Rules of Engagement, for the attestation block.
     pub roe_hash: Option<String>,
     pub report_reference: String,
+    /// Exceptions in force for this target, printed as the report's register.
+    ///
+    /// `default` keeps engagement JSON written before the register existed
+    /// deserialisable.
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionRecord>,
+    /// Document classification shown on the cover and in the footer.
+    #[serde(default = "default_classification")]
+    pub classification: String,
+    /// Who reviewed the report before issue, for the document-control table.
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
+    /// Report revision, e.g. "1.0". Shown in document control.
+    #[serde(default = "default_revision")]
+    pub revision: String,
+}
+
+fn default_classification() -> String {
+    "Confidential".to_string()
+}
+
+fn default_revision() -> String {
+    "1.0".to_string()
 }
 
 impl ReportContext {
@@ -65,7 +89,79 @@ impl ReportContext {
             rate_limit_rps: 5,
             roe_hash: None,
             report_reference: format!("SV-{}", now.format("%Y%m%d-%H%M")),
+            exceptions: Vec::new(),
+            classification: default_classification(),
+            reviewed_by: None,
+            revision: default_revision(),
         }
+    }
+
+    /// How long the assessment window was, in whole days (minimum one).
+    pub fn duration_days(&self) -> i64 {
+        let days = (self.assessment_end - self.assessment_start).num_days();
+        days.max(1)
+    }
+
+    /// Accepted-risk exceptions still in force, newest first.
+    pub fn active_acceptances(&self) -> Vec<&ExceptionRecord> {
+        let now = Utc::now();
+        let mut records: Vec<&ExceptionRecord> = self
+            .exceptions
+            .iter()
+            .filter(|e| e.kind == crate::exceptions::ExceptionKind::AcceptedRisk)
+            .filter(|e| e.is_active_at(now))
+            .collect();
+        records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        records
+    }
+
+    /// False-positive dismissals still in force, newest first.
+    pub fn active_dismissals(&self) -> Vec<&ExceptionRecord> {
+        let now = Utc::now();
+        let mut records: Vec<&ExceptionRecord> = self
+            .exceptions
+            .iter()
+            .filter(|e| e.kind == crate::exceptions::ExceptionKind::FalsePositive)
+            .filter(|e| e.is_active_at(now))
+            .collect();
+        records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        records
+    }
+}
+
+/// A report's findings split by how the document must treat them.
+///
+/// The split is what makes an exception mean anything. Everything the client
+/// still carries as open exposure drives the counts, the posture score and the
+/// remediation roadmap; a weakness the business has formally accepted does not
+/// — it is disclosed in its own register, with the justification and the owner,
+/// rather than sitting in the roadmap as work nobody intends to do.
+///
+/// False positives never reach here: they are removed at selection time,
+/// because a report that asks the reader to discount something that was never
+/// real has wasted their attention and inflated its own numbers.
+#[derive(Debug, Clone, Default)]
+pub struct ReportFindings {
+    /// Open, in-progress and remediated findings — the live picture.
+    pub active: Vec<Finding>,
+    /// Findings carried under a formal acceptance.
+    pub accepted: Vec<Finding>,
+}
+
+impl ReportFindings {
+    /// Split `findings` into the live set and the accepted set, each sorted
+    /// highest-risk first.
+    pub fn partition(findings: &[Finding]) -> Self {
+        let sorted = sort_by_priority(findings);
+        let (accepted, active): (Vec<Finding>, Vec<Finding>) = sorted
+            .into_iter()
+            .partition(|f| f.status == FindingStatus::AcceptedRisk);
+        Self { active, accepted }
+    }
+
+    /// Severity tallies over the live set only.
+    pub fn counts(&self) -> SeverityCounts {
+        SeverityCounts::of(&self.active)
     }
 }
 
@@ -339,6 +435,10 @@ impl ReportEngine {
     /// SARIF 2.1.0 for CI pipelines and code-scanning dashboards.
     pub fn generate_sarif_json(findings: &[Finding]) -> String {
         let sorted = sort_by_priority(findings);
+        // SARIF has a first-class concept for "known and deliberately not
+        // acted on", so an accepted risk is emitted as a suppressed result
+        // rather than silently dropped: a code-scanning dashboard then stops
+        // failing the build on it without losing the record that it exists.
 
         // SARIF requires unique rule ids; collapse findings onto their check class.
         let mut rules: Vec<serde_json::Value> = Vec::new();
@@ -365,7 +465,7 @@ impl ReportEngine {
         let results: Vec<serde_json::Value> = sorted
             .iter()
             .map(|f| {
-                serde_json::json!({
+                let mut result = serde_json::json!({
                     "ruleId": sarif_rule_id(f),
                     "level": sarif_level(&f.severity),
                     "message": { "text": format!("[Priority {:.1}] {}", f.priority_score, f.title) },
@@ -378,8 +478,17 @@ impl ReportEngine {
                         "priorityScore": f.priority_score,
                         "severity": format!("{:?}", f.severity),
                         "sourceTools": f.source_tools,
+                        "status": format!("{:?}", f.status),
                     }
-                })
+                });
+                if f.status == FindingStatus::AcceptedRisk {
+                    result["suppressions"] = serde_json::json!([{
+                        "kind": "external",
+                        "status": "accepted",
+                        "justification": "Formally accepted by the risk owner; see the engagement's exception register.",
+                    }]);
+                }
+                result
             })
             .collect();
 
@@ -411,20 +520,26 @@ impl ReportEngine {
         findings: &[Finding],
         coverage: Option<&CoverageReport>,
     ) -> String {
-        let counts = SeverityCounts::of(findings);
+        // The same split the HTML reports use, so a pipeline consuming this
+        // export and a human reading the PDF cannot disagree about the numbers.
+        let split = ReportFindings::partition(findings);
+        let counts = split.counts();
         let posture = PostureScore::compute(&counts, coverage);
         let payload = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": "1.1",
             "generator": { "name": "SentinelVAPT", "version": env!("CARGO_PKG_VERSION") },
             "engagement": ctx,
             "summary": {
                 "severityCounts": counts,
                 "postureScore": posture.score,
                 "postureBand": posture.band.label(),
-                "totalFindings": findings.len(),
+                "totalFindings": split.active.len(),
+                "acceptedRiskCount": split.accepted.len(),
             },
             "coverage": coverage,
-            "findings": sort_by_priority(findings),
+            "findings": split.active,
+            "acceptedRisks": split.accepted,
+            "exceptions": ctx.exceptions,
         });
         serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
     }

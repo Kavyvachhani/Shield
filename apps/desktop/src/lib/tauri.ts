@@ -12,7 +12,8 @@ import type {
   ReportRecord, GenerateReportOutput, FindingDetail, CoverageReport,
   CreateProjectInput, CreateTargetInput, CreateRoEInput, SetProjectLogoInput,
   SetCredentialsInput, CredentialStatus,
-  TriageInput, FindingFilter, GenerateReportInput,
+  TriageInput, TriageOutcome, FindingFilter, GenerateReportInput,
+  ExceptionRecord, RecordExceptionInput,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
 } from '../types';
 
@@ -86,8 +87,20 @@ export const api = {
   getFindingDetail: (findingId: string): Promise<FindingDetail> =>
     invoke('get_finding_detail', { findingId }),
 
-  triageFinding: (input: TriageInput): Promise<Finding> =>
+  triageFinding: (input: TriageInput): Promise<TriageOutcome> =>
     invoke('triage_finding', { input }),
+
+  // Exception register. Decisions here outlive the scan that raised the
+  // finding, so a dismissal or an acceptance is applied to every later scan
+  // instead of being re-triaged on each run.
+  listExceptions: (targetId: string): Promise<ExceptionRecord[]> =>
+    invoke('list_exceptions', { targetId }),
+
+  recordException: (input: RecordExceptionInput): Promise<ExceptionRecord> =>
+    invoke('record_exception', { input }),
+
+  revokeException: (exceptionId: string): Promise<void> =>
+    invoke('revoke_exception', { exceptionId }),
 
   // Reports
   generateReport: (input: GenerateReportInput): Promise<GenerateReportOutput> =>

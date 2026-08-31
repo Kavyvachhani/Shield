@@ -66,6 +66,10 @@ fn main() {
             commands::findings::get_finding,
             commands::findings::get_finding_detail,
             commands::findings::triage_finding,
+            // Exception register — decisions that survive a re-scan
+            commands::exceptions::list_exceptions,
+            commands::exceptions::record_exception,
+            commands::exceptions::revoke_exception,
             // Reports
             commands::reports::generate_report,
             commands::reports::export_report,

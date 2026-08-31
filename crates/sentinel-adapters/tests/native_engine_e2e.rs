@@ -120,11 +120,19 @@ fn bad_response(path: &str, origin: Option<&str>) -> String {
                 "200 OK",
                 &headers,
                 r#"<!DOCTYPE html><html><head><title>Vulnerable</title>
+<meta name="generator" content="WordPress 6.1.1">
 <script src="http://cdn.example.test/lib.js"></script>
 </head><body>
 <!-- TODO: remove hardcoded password admin123 before launch -->
 <a href="https://external.example.test" target="_blank">External</a>
-<form action="/login"><input type="password" name="p"></form>
+<form action="/login"><input type="password" name="p" autocomplete="on"></form>
+<script>
+// AKIAIOSFODNN7EXAMPLE is AWS's own published documentation key. It is on
+// GitHub's secret-scanning allowlist, which is why it can sit here as a whole
+// literal while the fixtures in disclosure.rs have to be assembled at run time.
+var cfg = { awsKey: "AKIAIOSFODNN7EXAMPLE", upstream: "http://10.0.4.17:8080/api" };
+fetch("http://169.254.169.254/latest/meta-data/iam/security-credentials/");
+</script>
 </body></html>"#,
             )
         }
@@ -140,15 +148,33 @@ fn good_response(path: &str) -> String {
         "200 OK",
         &[
             "Content-Type: text/html".to_string(),
-            "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'".to_string(),
+            "Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; \
+             base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+                .replace("             ", "")
+                .to_string(),
             "X-Content-Type-Options: nosniff".to_string(),
             "X-Frame-Options: DENY".to_string(),
             "Referrer-Policy: strict-origin-when-cross-origin".to_string(),
             "Permissions-Policy: camera=(), microphone=(), geolocation=()".to_string(),
+            "Cross-Origin-Opener-Policy: same-origin".to_string(),
+            "Cross-Origin-Resource-Policy: same-origin".to_string(),
+            // Explicitly off, which is the value the spec now recommends.
+            "X-XSS-Protection: 0".to_string(),
             "Cache-Control: no-store".to_string(),
             "Set-Cookie: JSESSIONID=abc; HttpOnly; SameSite=Lax; Path=/".to_string(),
         ],
-        "<!DOCTYPE html><html><head><title>Hardened</title></head><body>OK</body></html>",
+        // A well-built page that nonetheless contains every shape the
+        // disclosure and content checks look for *without* the substance:
+        // a bundler path, an unversioned generator, a protected _blank link and
+        // a password field in its default state. None of these may report.
+        r#"<!DOCTYPE html><html><head><title>Hardened</title>
+<meta name="generator" content="Hugo">
+</head><body>OK
+<a href="https://external.example.test" target="_blank" rel="noreferrer">External</a>
+<form action="/login"><input type="password" name="p"></form>
+<script>var m="/static/node_modules/react/index.js.map";var v="Aurora-01";</script>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="">
+</body></html>"#,
     )
 }
 
@@ -217,9 +243,39 @@ async fn misconfigured_server_yields_the_expected_findings() {
         "Third-Party Script Loaded without Subresource Integrity",
         "External Link Opens a New Tab without noopener",
         "Sensitive Information Disclosed in HTML Comments",
+        // Cross-origin isolation and the legacy filter.
+        "Cross-Origin-Opener-Policy Not Set",
+        "Cross-Origin-Resource-Policy Not Set",
+        // Information disclosure.
+        "Credential or API Key Exposed in Client-Delivered Content",
+        "Internal Hostname or Private IP Address Disclosed",
+        "Cloud Instance Metadata Endpoint Referenced in Client Content",
+        "Application Framework and Version Disclosed in Page Metadata",
+        "Password Field Explicitly Opts Into Stored-Value Autocomplete",
     ] {
-        assert!(has(&findings, expected), "expected a finding for: {expected}");
+        assert!(
+            has(&findings, expected),
+            "expected a finding for: {expected} (all: {:?})",
+            findings.iter().map(|f| &f.title).collect::<Vec<_>>()
+        );
     }
+
+    // The credential must be identified without being republished: a report is
+    // emailed and archived, so reprinting the secret discloses it a second time.
+    let secret_finding = findings
+        .iter()
+        .find(|f| f.title.contains("Credential or API Key"))
+        .expect("the AWS key must be found");
+    let rendered = format!(
+        "{} {} {:?}",
+        secret_finding.description,
+        secret_finding.remediation,
+        secret_finding.evidences.iter().map(|e| &e.content).collect::<Vec<_>>()
+    );
+    assert!(
+        !rendered.contains("AKIAIOSFODNN7EXAMPLE"),
+        "the finding reprinted the secret it is warning about"
+    );
 
     // Mixed content is only meaningful on an HTTPS page — an http:// subresource
     // on an http:// page is not a downgrade. The test server has no TLS, so the
@@ -249,6 +305,23 @@ async fn hardened_server_yields_no_configuration_findings() {
         "CORS Policy",
         "Directory Listing Enabled",
         "Server Software Version Disclosed",
+        // The new checks must be as quiet on a good server as the old ones.
+        "Cross-Origin-Opener-Policy Not Set",
+        "Cross-Origin-Resource-Policy Not Set",
+        "Legacy X-XSS-Protection Filter Enabled",
+        "Credential or API Key Exposed",
+        "Private Key Material Served",
+        "Internal Hostname or Private IP Address Disclosed",
+        "Cloud Instance Metadata Endpoint Referenced",
+        "Application Framework and Version Disclosed",
+        // Regression cover for the false positives that were fixed: a bundler
+        // path is not a stack trace, an unversioned generator is not a version
+        // disclosure, rel=noreferrer is protection, a default password field is
+        // not a weakness, and `img-src data:` is not a script source.
+        "Stack Trace or Debug Output",
+        "External Link Opens a New Tab without noopener",
+        "Password Field Explicitly Opts Into",
+        "Weak Content-Security-Policy",
     ] {
         assert!(
             !has(&findings, unexpected),

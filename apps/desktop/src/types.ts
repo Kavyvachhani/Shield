@@ -75,6 +75,12 @@ export interface Finding {
   sourceTools: string[];
   triageNote?: string;
   priorityRationale?: string;
+  /**
+   * Stable identity of this weakness across scans. Findings are re-created with
+   * fresh ids on every run, so this — not `id` — is what an exception is keyed
+   * on and what the table matches against the register.
+   */
+  fingerprint: string;
   createdAt: string;
 }
 
@@ -223,6 +229,57 @@ export interface TriageInput {
   newStatus: FindingStatus;
   triageNote: string;
   analystName: string;
+  /**
+   * Review date for an acceptance, as an RFC 3339 timestamp. Optional: an
+   * acceptance without one stands until it is withdrawn.
+   */
+  expiresAt?: string;
+}
+
+/** What a triage decision did — to this scan, and to every later one. */
+export interface TriageOutcome {
+  finding: Finding;
+  /** The exception the decision recorded, when it recorded one. */
+  exception: ExceptionRecord | null;
+  /** How many standing exceptions the decision withdrew. */
+  withdrawn: number;
+  /** Plain-language summary of what happens on the next scan. */
+  effect: string;
+}
+
+export type ExceptionKind = 'False Positive' | 'Accepted Risk';
+
+/**
+ * One entry in the exception register.
+ *
+ * Held against the target rather than a scan, which is the point: a decision
+ * taken once is re-applied to every later scan automatically instead of being
+ * re-triaged on each run.
+ */
+export interface ExceptionRecord {
+  id: string;
+  targetId: string;
+  fingerprint: string;
+  kind: ExceptionKind;
+  title: string;
+  affectedComponent: string;
+  severity: Severity;
+  justification: string;
+  raisedBy: string;
+  createdAt: string;
+  expiresAt: string | null;
+  /** Whether it is still in force right now. */
+  active: boolean;
+  /** Days until it lapses; negative once lapsed, null when open-ended. */
+  daysUntilExpiry: number | null;
+}
+
+export interface RecordExceptionInput {
+  findingId: string;
+  kind: ExceptionKind;
+  justification: string;
+  raisedBy: string;
+  expiresAt?: string;
 }
 
 export type ReportType = 'client' | 'developer' | 'sarif' | 'markdown' | 'json';
@@ -236,6 +293,12 @@ export interface GenerateReportInput {
   analyst?: string;
   /** Base64 `data:image/...` logo. Remote URLs and SVG are ignored by the engine. */
   logoDataUri?: string;
+  /** Named in the document-control table and the sign-off block. */
+  reviewedBy?: string;
+  /** Shown on the cover and in the banner on every page. Defaults to Confidential. */
+  classification?: string;
+  /** Report revision, e.g. "1.0". */
+  revision?: string;
 }
 
 export interface GenerateReportOutput {

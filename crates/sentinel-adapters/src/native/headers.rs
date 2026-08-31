@@ -277,6 +277,96 @@ every authenticated or personalised response.",
 
 // ── Checks ───────────────────────────────────────────────────────────────────
 
+const COOP_MISSING: CheckSpec = CheckSpec {
+    id: "NATIVE-COOP-MISSING",
+    title: "Cross-Origin-Opener-Policy Not Set",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1021",
+    wstg: "WSTG-CLNT-13",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "The document does not set Cross-Origin-Opener-Policy, so it shares a browsing-context \
+group with any page that opens it. A window opened by, or opening, this document keeps a live reference to \
+it and can read cross-origin properties the browser would otherwise partition — the basis of \
+cross-window attacks such as XS-Leaks, and the reason a page without it cannot use the \
+cross-origin-isolated APIs at all.",
+    remediation: "Send `Cross-Origin-Opener-Policy: same-origin` on top-level documents. Where a \
+third-party flow depends on the opener reference — a payment or OAuth popup that calls back into the \
+opener — use `same-origin-allow-popups` on the pages involved rather than dropping the header everywhere.",
+    references: &[
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Opener-Policy",
+    ],
+};
+
+const CORP_MISSING: CheckSpec = CheckSpec {
+    id: "NATIVE-CORP-MISSING",
+    title: "Cross-Origin-Resource-Policy Not Set",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-829",
+    wstg: "WSTG-CLNT-13",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "The response does not set Cross-Origin-Resource-Policy, so any other site may embed it \
+as a subresource. For a document or an API response this permits cross-site script inclusion and the \
+side-channel measurement of response size and timing that Spectre-class attacks depend on.",
+    remediation: "Send `Cross-Origin-Resource-Policy: same-origin` on documents and API responses, and \
+`same-site` where subdomains legitimately embed the resource. Use `cross-origin` only for assets that are \
+deliberately public, such as a CDN-hosted font or image.",
+    references: &[
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Resource-Policy",
+    ],
+};
+
+const XSS_FILTER_ENABLED: CheckSpec = CheckSpec {
+    id: "NATIVE-XSS-FILTER-ENABLED",
+    title: "Legacy X-XSS-Protection Filter Enabled",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1173",
+    wstg: "WSTG-CONF-02",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "The response enables the legacy browser XSS auditor with `X-XSS-Protection: 1`. The \
+header is deprecated and every current browser has removed the filter, but where it is still honoured it \
+does harm rather than good: the auditor's own heuristics have been used to *introduce* vulnerabilities by \
+selectively neutralising legitimate script on the page, and `mode=block` turns a false match into a \
+same-origin denial of service. This is why the header's own specification now recommends disabling it.\
+\n\nSetting it to `1` is a misconfiguration, not a missing control — the absence of the header is not \
+reported.",
+    remediation: "Set `X-XSS-Protection: 0` to disable the legacy auditor explicitly, and rely on a \
+Content-Security-Policy for actual XSS mitigation. Removing the header entirely is also acceptable; \
+setting it to `0` is preferred because it states the intent for any intermediary that would otherwise \
+add a default.",
+    references: &[
+        "https://owasp.org/www-project-secure-headers/#x-xss-protection",
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-XSS-Protection",
+    ],
+};
+
+const COOKIE_NO_PREFIX: CheckSpec = CheckSpec {
+    id: "NATIVE-COOKIE-PREFIX",
+    title: "Session Cookie Without a __Host- or __Secure- Prefix",
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1275",
+    wstg: "WSTG-SESS-02",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "A session cookie is issued over HTTPS without a `__Host-` or `__Secure-` name prefix. \
+The prefixes are enforced by the browser itself rather than by the application: `__Secure-` refuses the \
+cookie unless it is set over HTTPS with the Secure attribute, and `__Host-` additionally requires \
+Path=/ and forbids a Domain attribute, which is what prevents a compromised or attacker-controlled \
+sibling subdomain from overwriting the session cookie of the parent site.\n\nWithout a prefix, a \
+weakness anywhere on a sibling subdomain — an abandoned marketing site, a staging host, a takeover of a \
+dangling DNS record — can be used to fixate the session cookie for the main application.",
+    remediation: "Rename the session cookie to `__Host-<name>` and set it with `Secure; Path=/` and no \
+`Domain` attribute. Where a Domain attribute is genuinely required so subdomains can read the cookie, use \
+`__Secure-<name>` instead. Both are a one-line change at the point the cookie is issued and need no \
+client-side support.",
+    references: &[
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies#cookie_prefixes",
+        "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+    ],
+};
+
 /// Run every passive header/cookie check against one response.
 /// Every check this module can raise.
 ///
@@ -299,6 +389,10 @@ pub const SPECS: &[CheckSpec] = &[
     COOKIE_NO_SAMESITE,
     SESSION_LONG_LIVED,
     CACHE_SENSITIVE,
+    COOP_MISSING,
+    CORP_MISSING,
+    XSS_FILTER_ENABLED,
+    COOKIE_NO_PREFIX,
 ];
 
 pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding> {
@@ -410,6 +504,40 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
         ));
     }
 
+    // ── Cross-origin isolation ───────────────────────────────────────────────
+    // Only on documents: COOP governs the browsing context, which a stylesheet
+    // or an image does not have one of.
+    if is_html(resp) && resp.header("cross-origin-opener-policy").is_none() {
+        findings.push(make(
+            &COOP_MISSING,
+            "No Cross-Origin-Opener-Policy header was returned on an HTML document.".into(),
+            vec![format!("curl -sSI {url} | grep -i cross-origin-opener-policy")],
+            vec![ev(&resp.evidence_summary())],
+        ));
+    }
+    if resp.header("cross-origin-resource-policy").is_none() {
+        findings.push(make(
+            &CORP_MISSING,
+            "No Cross-Origin-Resource-Policy header was returned.".into(),
+            vec![format!("curl -sSI {url} | grep -i cross-origin-resource-policy")],
+            vec![ev(&resp.evidence_summary())],
+        ));
+    }
+
+    // ── Legacy XSS auditor ───────────────────────────────────────────────────
+    // Reported only when it is switched on. Its absence is the correct state,
+    // and the header's own guidance is now to disable it.
+    if let Some(value) = resp.header("x-xss-protection") {
+        if enables_legacy_xss_filter(&value) {
+            findings.push(make(
+                &XSS_FILTER_ENABLED,
+                format!("X-XSS-Protection is set to '{}'.", truncate(&value, 100)),
+                vec![format!("curl -sSI {url} | grep -i x-xss-protection")],
+                vec![ev(&format!("X-XSS-Protection: {}", truncate(&value, 200)))],
+            ));
+        }
+    }
+
     // ── Permissions-Policy (informational) ───────────────────────────────────
     if resp.header("permissions-policy").is_none() && is_html(resp) {
         findings.push(make(
@@ -485,6 +613,20 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
                 ));
             }
         }
+        // The prefixes are only meaningful over HTTPS — the browser rejects a
+        // prefixed cookie set over plaintext, so demanding one there would be
+        // advice that cannot be followed.
+        if resp.is_https() && !cookie.has_security_prefix() {
+            findings.push(make(
+                &COOKIE_NO_PREFIX,
+                format!(
+                    "Session cookie '{}' carries neither the __Host- nor the __Secure- name prefix.",
+                    cookie.name
+                ),
+                vec![format!("curl -sSI {url} | grep -i set-cookie")],
+                vec![NativeFinding::evidence("http_response", "Set-Cookie (value redacted)", &redacted)],
+            ));
+        }
         match cookie.same_site.as_deref() {
             None => findings.push(make(
                 &COOKIE_NO_SAMESITE,
@@ -552,9 +694,29 @@ pub fn weak_hsts(value: &str) -> Option<String> {
 }
 
 /// Identify directives that materially weaken a Content-Security-Policy.
+///
+/// Every rule here is evaluated against the *directive that actually governs
+/// script execution*, not against the policy string as a whole. Two of them
+/// previously matched anywhere in the policy and produced findings on
+/// well-built policies:
+///
+/// * `data:` was reported whenever the substring appeared alongside any
+///   script-ish directive, so the entirely normal `img-src 'self' data:` — used
+///   by nearly every application that inlines an icon — was reported as
+///   "a data: source in a script context". It is now only reported when `data:`
+///   is a source of the directive that governs scripts.
+/// * A missing `object-src` was reported unconditionally, including on policies
+///   with `default-src 'none'`, where plugin content is already blocked and
+///   adding `object-src` would change nothing.
 pub fn analyze_csp(policy: &str) -> Vec<String> {
     let lower = policy.to_lowercase();
     let mut issues = Vec::new();
+
+    // The directive that governs scripts: script-src when present, otherwise
+    // whatever default-src falls back to.
+    let script_context = directive_sources(&lower, "script-src")
+        .or_else(|| directive_sources(&lower, "script-src-elem"))
+        .or_else(|| directive_sources(&lower, "default-src"));
 
     if lower.contains("'unsafe-inline'") {
         issues.push("'unsafe-inline' permits inline scripts or styles, which defeats the policy's XSS protection.".to_string());
@@ -565,45 +727,107 @@ pub fn analyze_csp(policy: &str) -> Vec<String> {
     if directive_has_wildcard(&lower, "default-src") || directive_has_wildcard(&lower, "script-src") {
         issues.push("A wildcard (*) source allows scripts from any origin.".to_string());
     }
-    if lower.contains("data:") && (lower.contains("script-src") || lower.contains("default-src")) {
-        issues.push("A data: scheme source in a script context allows inline payloads to be loaded as script.".to_string());
+    if script_context
+        .as_ref()
+        .is_some_and(|sources| sources.iter().any(|s| s == "data:"))
+    {
+        issues.push("A data: scheme source is allowed in the script context, so an inline payload can be loaded as script.".to_string());
     }
-    if !lower.contains("object-src") {
-        issues.push("object-src is not set; plugin content is not restricted (it does not inherit from default-src in all browsers).".to_string());
+    // `object-src` only matters when something could otherwise load plugin
+    // content. A restrictive `default-src` already covers it in every browser
+    // that implements the fallback, so demanding the directive there is noise.
+    let default_blocks_everything = directive_sources(&lower, "default-src")
+        .is_some_and(|sources| sources.iter().any(|s| s == "'none'"));
+    if !lower.contains("object-src") && !default_blocks_everything {
+        issues.push("object-src is not set and default-src does not block plugin content, so <object> and <embed> sources are unrestricted.".to_string());
     }
     if !lower.contains("base-uri") {
         issues.push("base-uri is not set, so an injected <base> tag can redirect every relative URL on the page.".to_string());
+    }
+    if !lower.contains("frame-ancestors") {
+        issues.push("frame-ancestors is not set, so framing is governed only by the legacy X-Frame-Options header.".to_string());
+    }
+    if !lower.contains("form-action") {
+        issues.push("form-action is not set, so an injected <form> can post the page's input to an attacker-controlled endpoint.".to_string());
     }
 
     issues
 }
 
-/// Whether a named directive contains a bare `*` source.
-fn directive_has_wildcard(lower_policy: &str, directive: &str) -> bool {
+/// The source list of a named directive, if the policy declares it.
+///
+/// Matching is on the whole directive name, so looking up `script-src` does not
+/// return the sources of `script-src-elem`.
+fn directive_sources(lower_policy: &str, directive: &str) -> Option<Vec<String>> {
     lower_policy
         .split(';')
         .map(str::trim)
-        .filter(|d| d.starts_with(directive))
-        .any(|d| {
-            d.trim_start_matches(directive)
-                .split_whitespace()
-                .any(|token| token == "*")
+        .filter(|d| !d.is_empty())
+        .find(|d| {
+            let mut tokens = d.split_whitespace();
+            tokens.next() == Some(directive)
         })
+        .map(|d| d.split_whitespace().skip(1).map(str::to_string).collect())
 }
 
+/// Whether a named directive contains a bare `*` source.
+fn directive_has_wildcard(lower_policy: &str, directive: &str) -> bool {
+    directive_sources(lower_policy, directive)
+        .is_some_and(|sources| sources.iter().any(|token| token == "*"))
+}
+
+/// Whether a Referrer-Policy value actually protects the URL from leaking.
+///
+/// The substring test this replaces accepted `no-referrer-when-downgrade`,
+/// because it contains "no-referrer" — but that value sends the full URL to
+/// every other HTTPS origin, which is precisely what the check exists to catch.
+/// Values are now compared as whole tokens against the list that is genuinely
+/// safe.
 fn is_strict_referrer_policy(value: &str) -> bool {
-    let v = value.to_lowercase();
-    v.contains("no-referrer")
-        || v.contains("same-origin")
-        || v.contains("strict-origin")
+    const STRICT: &[&str] = &[
+        "no-referrer",
+        "same-origin",
+        "strict-origin",
+        "strict-origin-when-cross-origin",
+    ];
+    // A policy may list several values as a fallback chain; the last one the
+    // browser understands wins, so every token has to be acceptable.
+    let tokens: Vec<String> = value
+        .split(',')
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    !tokens.is_empty() && tokens.iter().all(|t| STRICT.contains(&t.as_str()))
 }
 
+/// Whether the response tells caches not to retain it.
+///
+/// `no-store` is the correct directive and is accepted on its own. The
+/// `private, no-cache` pairing is also accepted: a shared cache will not store
+/// it and a private one must revalidate, which is the behaviour the check is
+/// asking for. A `Pragma: no-cache` sent alongside either is honoured too, for
+/// the HTTP/1.0 intermediaries that still exist behind some corporate proxies.
 fn suppresses_cache(resp: &ProbeResponse) -> bool {
-    resp.header("cache-control")
-        .map(|v| {
-            let v = v.to_lowercase();
-            v.contains("no-store") || (v.contains("no-cache") && v.contains("private"))
-        })
+    let cache_control = resp.header("cache-control").unwrap_or_default().to_lowercase();
+    if cache_control.contains("no-store") {
+        return true;
+    }
+    let pragma_no_cache = resp
+        .header("pragma")
+        .map(|v| v.to_lowercase().contains("no-cache"))
+        .unwrap_or(false);
+    cache_control.contains("no-cache") && (cache_control.contains("private") || pragma_no_cache)
+}
+
+/// Whether an X-XSS-Protection value switches the legacy auditor on.
+///
+/// `0` is the recommended value and must not be reported; only `1`, with or
+/// without a mode, enables the filter this check exists to warn about.
+pub fn enables_legacy_xss_filter(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .map(|first| first.trim() == "1")
         .unwrap_or(false)
 }
 
@@ -702,6 +926,12 @@ impl ParsedCookie {
         None
     }
 
+    /// Whether the cookie name carries a browser-enforced security prefix.
+    pub fn has_security_prefix(&self) -> bool {
+        let n = self.name.to_lowercase();
+        n.starts_with("__host-") || n.starts_with("__secure-")
+    }
+
     /// Heuristic: does this cookie carry session or authentication state?
     pub fn looks_like_session(&self) -> bool {
         let n = self.name.to_lowercase();
@@ -772,9 +1002,55 @@ mod tests {
     #[test]
     fn strong_csp_reports_no_issues() {
         let issues = analyze_csp(
-            "default-src 'self'; script-src 'self' 'nonce-abc123'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self' 'nonce-abc123'; object-src 'none'; \
+             base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
         );
         assert!(issues.is_empty(), "unexpected issues: {issues:?}");
+    }
+
+    /// `img-src 'self' data:` is how almost every application inlines an icon.
+    /// Reporting it as "a data: source in a script context" made the CSP check
+    /// fire on policies that were doing the right thing.
+    #[test]
+    fn a_data_source_outside_the_script_context_is_not_reported() {
+        let issues = analyze_csp(
+            "default-src 'self'; script-src 'self'; img-src 'self' data:; object-src 'none'; \
+             base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        );
+        assert!(
+            !issues.iter().any(|i| i.contains("data:")),
+            "img-src data: is not a script source: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_data_source_in_the_script_context_is_still_reported() {
+        let issues = analyze_csp("default-src 'self'; script-src 'self' data:");
+        assert!(issues.iter().any(|i| i.contains("script context")), "{issues:?}");
+
+        // And through the default-src fallback when script-src is absent.
+        let inherited = analyze_csp("default-src 'self' data:");
+        assert!(inherited.iter().any(|i| i.contains("script context")), "{inherited:?}");
+    }
+
+    /// `default-src 'none'` already blocks plugin content, so demanding a
+    /// separate object-src there is advice with no effect.
+    #[test]
+    fn object_src_is_not_demanded_when_default_src_blocks_everything() {
+        let issues = analyze_csp(
+            "default-src 'none'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        );
+        assert!(
+            !issues.iter().any(|i| i.contains("object-src")),
+            "unexpected: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_named_directive_does_not_match_a_longer_one() {
+        // script-src-elem must not be read as script-src.
+        let issues = analyze_csp("default-src 'self'; script-src-elem 'self' data:");
+        assert!(issues.iter().any(|i| i.contains("script context")), "{issues:?}");
     }
 
     #[test]
@@ -870,5 +1146,14 @@ mod tests {
         assert!(is_strict_referrer_policy("no-referrer"));
         assert!(!is_strict_referrer_policy("unsafe-url"));
         assert!(!is_strict_referrer_policy("origin-when-cross-origin"));
+        // The substring test this replaced accepted this value because it
+        // contains "no-referrer", while it in fact sends the full URL to every
+        // other HTTPS origin — a false negative on exactly the leak the check
+        // exists to find.
+        assert!(!is_strict_referrer_policy("no-referrer-when-downgrade"));
+        // A fallback chain is only as strict as its weakest member.
+        assert!(!is_strict_referrer_policy("no-referrer, unsafe-url"));
+        assert!(is_strict_referrer_policy("no-referrer, strict-origin-when-cross-origin"));
+        assert!(!is_strict_referrer_policy(""));
     }
 }

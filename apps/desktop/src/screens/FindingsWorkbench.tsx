@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, SlidersHorizontal, ChevronRight, X, AlertOctagon, Flag } from 'lucide-react';
-import type { Finding, FindingStatus, FindingFilter, TriageInput } from '../types';
+import {
+  Search, SlidersHorizontal, ChevronRight, X, AlertOctagon, Flag,
+  ShieldOff, Undo2, CalendarClock,
+} from 'lucide-react';
+import type {
+  Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord,
+} from '../types';
 import { api } from '../lib/tauri';
 
 interface Props {
@@ -8,13 +13,16 @@ interface Props {
   targetId: string;
 }
 
+/** The two statuses that record a standing decision against the target. */
+const EXCEPTION_STATUSES: FindingStatus[] = ['Accepted Risk', 'False Positive'];
+
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Info'];
 const STATUSES: FindingStatus[] = ['Open', 'In Progress', 'Remediated', 'Accepted Risk', 'False Positive'];
 const SEV_COLORS: Record<string, string> = {
   Critical: 'badge-critical', High: 'badge-high', Medium: 'badge-medium', Low: 'badge-low', Info: 'badge-info',
 };
 
-export function FindingsWorkbench({ scanId }: Props) {
+export function FindingsWorkbench({ scanId, targetId }: Props) {
   const [findings, setFindings]       = useState<Finding[]>([]);
   const [selected, setSelected]       = useState<Finding | null>(null);
   const [loading, setLoading]         = useState(true);
@@ -32,6 +40,14 @@ export function FindingsWorkbench({ scanId }: Props) {
   const [analystName, setAnalystName]   = useState('');
   const [triaging, setTriaging]         = useState(false);
   const [triageError, setTriageError]   = useState('');
+  const [reviewDate, setReviewDate]     = useState('');
+  const [triageEffect, setTriageEffect] = useState('');
+
+  // The standing decisions for this target. Kept alongside the findings because
+  // they are what governs the *next* scan: a row here is the reason a weakness
+  // will not be raised again, and withdrawing it is how you get it back.
+  const [exceptions, setExceptions] = useState<ExceptionRecord[]>([]);
+  const [showRegister, setShowRegister] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,7 +62,18 @@ export function FindingsWorkbench({ scanId }: Props) {
     setLoading(false);
   }, [scanId, sevFilter, statusFilter, toolFilter]);
 
+  const loadExceptions = useCallback(async () => {
+    try {
+      setExceptions(await api.listExceptions(targetId));
+    } catch {
+      // The register is supporting context, not the screen's reason to exist:
+      // failing to load it must not blank out the findings table.
+      setExceptions([]);
+    }
+  }, [targetId]);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadExceptions(); }, [loadExceptions]);
 
   const displayed = findings.filter(f =>
     !search || f.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -54,25 +81,48 @@ export function FindingsWorkbench({ scanId }: Props) {
     (f.cweId ?? '').toLowerCase().includes(search.toLowerCase())
   );
 
+  /** Whether the chosen status records a decision that outlives this scan. */
+  const recordsException = EXCEPTION_STATUSES.includes(triageStatus);
+
   async function submitTriage() {
     if (!selected) return;
     if (!triageNote.trim() || !analystName.trim()) {
       setTriageError('Both analyst name and triage note are required.'); return;
     }
-    setTriaging(true); setTriageError('');
+    setTriaging(true); setTriageError(''); setTriageEffect('');
     try {
       const input: TriageInput = {
         findingId: selected.id,
         newStatus: triageStatus,
         triageNote: triageNote.trim(),
         analystName: analystName.trim(),
+        // A date input gives a bare day; the backend wants a full timestamp, and
+        // end-of-day is the reading that matches "review by this date".
+        expiresAt: triageStatus === 'Accepted Risk' && reviewDate
+          ? new Date(`${reviewDate}T23:59:59Z`).toISOString()
+          : undefined,
       };
-      const updated = await api.triageFinding(input);
-      setSelected(updated);
-      setFindings(prev => prev.map(f => f.id === updated.id ? updated : f));
+      const outcome = await api.triageFinding(input);
+      setSelected(outcome.finding);
+      setFindings(prev => prev.map(f => (f.id === outcome.finding.id ? outcome.finding : f)));
       setTriageNote('');
+      setReviewDate('');
+      setTriageEffect(outcome.effect);
+      await loadExceptions();
     } catch (err) { setTriageError(String(err)); }
     finally { setTriaging(false); }
+  }
+
+  async function withdraw(exceptionId: string) {
+    try {
+      await api.revokeException(exceptionId);
+      await loadExceptions();
+    } catch (err) { setTriageError(String(err)); }
+  }
+
+  /** The standing decision covering a finding, if there is one. */
+  function exceptionFor(f: Finding): ExceptionRecord | undefined {
+    return exceptions.find(e => e.fingerprint === f.fingerprint && e.active);
   }
 
   return (
@@ -93,10 +143,68 @@ export function FindingsWorkbench({ scanId }: Props) {
             <SlidersHorizontal size={13} /> Filters
           </button>
 
+          <button
+            onClick={() => setShowRegister(v => !v)}
+            title="Decisions that carry forward to every later scan of this target"
+            style={{ padding: '7px 12px', background: showRegister ? 'rgba(148,163,184,0.14)' : 'var(--bg-elevated)', border: `1px solid ${showRegister ? 'rgba(148,163,184,0.4)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: showRegister ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <ShieldOff size={13} /> Exceptions
+            {exceptions.length > 0 && (
+              <span style={{ padding: '0 6px', borderRadius: 99, background: 'rgba(148,163,184,0.25)', fontSize: 10, fontWeight: 700 }}>
+                {exceptions.length}
+              </span>
+            )}
+          </button>
+
           <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
             {displayed.length} / {findings.length} findings
           </span>
         </div>
+
+        {showRegister && (
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-base)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 8 }}>
+              Exception register — applied automatically to every scan of this target
+            </div>
+            {exceptions.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                Nothing recorded yet. Marking a finding <strong>False Positive</strong> or{' '}
+                <strong>Accepted Risk</strong> adds it here, and the decision is then re-applied on
+                every later scan — so you triage each weakness once, not once per run.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {exceptions.map(e => (
+                  <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', opacity: e.active ? 1 : 0.55 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700, background: e.kind === 'Accepted Risk' ? 'rgba(251,191,36,0.14)' : 'rgba(148,163,184,0.14)', color: e.kind === 'Accepted Risk' ? '#fde68a' : '#94a3b8' }}>
+                          {e.kind}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {e.title}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 }}>
+                        {e.justification} — {e.raisedBy}
+                        {e.daysUntilExpiry !== null && (
+                          <span style={{ marginLeft: 6, color: !e.active ? 'var(--red)' : e.daysUntilExpiry <= 30 ? 'var(--amber)' : 'var(--text-muted)' }}>
+                            · {e.active ? `review in ${e.daysUntilExpiry} days` : 'lapsed — reported again on the next scan'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => withdraw(e.id)}
+                      title="Withdraw: this weakness is reported again on the next scan"
+                      style={{ flexShrink: 0, padding: '4px 9px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Undo2 size={11} /> Withdraw
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {showFilters && (
           <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -135,7 +243,7 @@ export function FindingsWorkbench({ scanId }: Props) {
                 {displayed.map((f) => (
                   <tr
                     key={f.id}
-                    onClick={() => { setSelected(f); setTriageStatus(f.status); setTriageNote(''); setTriageError(''); }}
+                    onClick={() => { setSelected(f); setTriageStatus(f.status); setTriageNote(''); setTriageError(''); setTriageEffect(''); setReviewDate(''); }}
                     style={{
                       cursor: 'pointer',
                       background: selected?.id === f.id ? 'rgba(34,211,238,0.05)' : 'transparent',
@@ -164,6 +272,11 @@ export function FindingsWorkbench({ scanId }: Props) {
                     </td>
                     <td style={{ padding: '9px 12px' }}>
                       <StatusPill status={f.status} />
+                      {exceptionFor(f) && (
+                        <div title="Carried forward from a standing exception" style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <ShieldOff size={9} /> standing
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: '9px 12px' }}>
                       <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
@@ -251,9 +364,15 @@ export function FindingsWorkbench({ scanId }: Props) {
               </div>
             </DetailSection>
 
+            {/* Validation confidence — the developer report shows the same figure,
+                so a reviewer here and a reader there start from the same claim. */}
+            <DetailSection title="Validation Confidence">
+              <ConfidencePanel finding={selected} />
+            </DetailSection>
+
             {/* Triage panel */}
             <DetailSection title="Triage & Status Override">
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                 {STATUSES.map(s => (
                   <button key={s} type="button" onClick={() => setTriageStatus(s)} style={{
                     padding: '5px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600,
@@ -274,11 +393,44 @@ export function FindingsWorkbench({ scanId }: Props) {
               />
               <textarea
                 value={triageNote} onChange={(e) => setTriageNote(e.target.value)}
-                placeholder="Triage rationale (required — written to audit trail)"
+                placeholder={recordsException
+                  ? 'Justification (required — printed in the report and kept for audit)'
+                  : 'Triage rationale (required — written to audit trail)'}
                 rows={3}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
               />
+
+              {triageStatus === 'Accepted Risk' && (
+                <div style={{ marginTop: 8 }}>
+                  <label style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+                    <CalendarClock size={11} /> Review date (optional)
+                  </label>
+                  <input
+                    type="date" value={reviewDate} onChange={(e) => setReviewDate(e.target.value)}
+                    style={{ padding: '7px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
+                  />
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.5 }}>
+                    On this date the acceptance lapses and the weakness returns to the open list.
+                    Leave it blank for an acceptance that stands until you withdraw it.
+                  </div>
+                </div>
+              )}
+
+              {recordsException && (
+                <div style={{ marginTop: 10, padding: '9px 11px', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  <strong>This carries forward.</strong>{' '}
+                  {triageStatus === 'False Positive'
+                    ? 'The finding is removed from every report, and the same dismissal is applied to every later scan of this target — you will not be asked about it again.'
+                    : 'The finding leaves the open counts and the posture score, and is disclosed instead in the client report’s accepted-risk register with this justification.'}
+                </div>
+              )}
+
               {triageError && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{triageError}</div>}
+              {triageEffect && (
+                <div style={{ fontSize: 11, color: 'var(--emerald)', marginTop: 8, padding: '8px 10px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
+                  {triageEffect}
+                </div>
+              )}
               <button
                 onClick={submitTriage} disabled={triaging}
                 style={{ marginTop: 10, padding: '8px 20px', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--cyan)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -317,6 +469,55 @@ function StatusPill({ status }: { status: string }) {
     <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: c.bg, color: c.color }}>
       {status}
     </span>
+  );
+}
+
+/**
+ * How much of this finding is direct observation and how much is inference.
+ *
+ * Mirrors the developer report's panel deliberately: the analyst triaging here
+ * and the engineer reading the PDF have to be looking at the same claim, or the
+ * conversation between them starts from two different numbers.
+ */
+function ConfidencePanel({ finding }: { finding: Finding }) {
+  const confidence = Math.round((1 - (finding.falsePositiveConfidence ?? 0.25)) * 100);
+  const [label, color] =
+      confidence >= 90 ? ['Confirmed', '#34d399']
+    : confidence >= 70 ? ['High confidence', '#6ee7b7']
+    : confidence >= 45 ? ['Needs verification', '#fbbf24']
+    :                    ['Likely false positive', '#f87171'];
+
+  const tools = finding.sourceTools.map(t => t.toLowerCase());
+  const runtime = tools.some(t => ['native', 'zap', 'nuclei', 'dast'].some(k => t.includes(k)));
+  const dependency = tools.some(t => t.includes('trivy'));
+  const staticOnly = !runtime && tools.some(t => ['semgrep', 'sast', 'gitleaks'].some(k => t.includes(k)));
+
+  const basis =
+      finding.sourceTools.length >= 2
+        ? `Reported independently by ${finding.sourceTools.length} engines.`
+    : dependency
+        ? 'Derived from a declared dependency version. Whether the vulnerable code path is reachable is not established here.'
+    : staticOnly
+        ? 'Matched by static analysis against the source. Runtime reachability is not confirmed.'
+    : runtime
+        ? 'Observed directly in a live response from the target.'
+        : 'Reported by the engine listed above.';
+
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+      <div style={{ flex: '0 0 96px', padding: '10px 8px', borderRadius: 'var(--radius-sm)', background: `${color}22`, border: `1px solid ${color}55`, textAlign: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1.1 }}>{confidence}%</div>
+        <div style={{ fontSize: 9, color, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
+      </div>
+      <div style={{ flex: 1, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        <div>{basis}</div>
+        <div style={{ marginTop: 5, color: 'var(--text-muted)' }}>
+          {finding.evidenceCount > 0
+            ? `${finding.evidenceCount} hashed evidence artefact${finding.evidenceCount === 1 ? '' : 's'} captured at the time of testing.`
+            : 'No evidence artefact was captured — verify by hand before scheduling work.'}
+        </div>
+      </div>
+    </div>
   );
 }
 

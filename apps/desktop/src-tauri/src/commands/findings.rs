@@ -1,5 +1,7 @@
-use crate::state::{log_persist_error, status_from_label, to_record, AppState, FindingRecord};
+use crate::commands::exceptions::{self, ExceptionView};
+use crate::state::{log_persist_error, new_id, status_from_label, to_record, AppState, FindingRecord};
 use chrono::Utc;
+use sentinel_core::exceptions::ExceptionKind;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -164,6 +166,28 @@ pub struct TriageInput {
     pub new_status: String,
     pub triage_note: String,
     pub analyst_name: String,
+    /// Review date for an acceptance, as an RFC 3339 timestamp. Optional; an
+    /// acceptance without one stands until it is withdrawn.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+/// The outcome of a triage decision.
+///
+/// The updated finding is not the whole story any more. Dismissing or accepting
+/// a weakness also writes a record against the target, and reopening one
+/// withdraws it — the analyst needs to be told that happened, because it governs
+/// what the *next* scan reports, not just this one.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageOutcome {
+    pub finding: FindingRecord,
+    /// The exception this decision recorded, when it recorded one.
+    pub exception: Option<ExceptionView>,
+    /// How many standing exceptions this decision withdrew.
+    pub withdrawn: usize,
+    /// Plain-language summary of what will happen on the next scan.
+    pub effect: String,
 }
 
 /// Valid triage states, matching `state::status_label`.
@@ -179,7 +203,7 @@ pub const VALID_STATUSES: &[&str] = &[
 pub async fn triage_finding(
     input: TriageInput,
     state: State<'_, AppState>,
-) -> Result<FindingRecord, String> {
+) -> Result<TriageOutcome, String> {
     let status = status_from_label(&input.new_status).ok_or_else(|| {
         format!(
             "Invalid status '{}'. Must be one of: {}",
@@ -187,37 +211,117 @@ pub async fn triage_finding(
             VALID_STATUSES.join(", ")
         )
     })?;
-    if input.triage_note.trim().is_empty() {
-        return Err("A triage note is required for every status change.".into());
+    let note = exceptions::require("A triage note", &input.triage_note)?;
+    let analyst = exceptions::require("The analyst name", &input.analyst_name)?;
+    // Parsed before anything is mutated, so a bad date cannot leave the finding
+    // half-triaged with no exception recorded against it.
+    let expires_at = exceptions::parse_expiry(input.expires_at.as_deref())?;
+
+    let (record, updated) = {
+        let mut store = state.findings.write().await;
+        let stored = store
+            .get_mut(&input.finding_id)
+            .ok_or_else(|| format!("Finding '{}' not found", input.finding_id))?;
+
+        stored.finding.status = status.clone();
+        // Notes append rather than overwrite: the triage history is audit evidence.
+        let entry = format!(
+            "[{}] {} → {}: {}",
+            Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+            analyst,
+            input.new_status,
+            note
+        );
+        stored.triage_note = Some(match &stored.triage_note {
+            Some(existing) => format!("{existing}\n{entry}"),
+            None => entry,
+        });
+
+        if let Err(e) = state.store.save_finding(&input.finding_id, stored) {
+            log_persist_error("triage decision", &e);
+        }
+
+        let record = sentinel_core::exceptions::from_triage(
+            &stored.finding,
+            &status,
+            &note,
+            &analyst,
+            expires_at,
+            new_id(),
+        );
+        (
+            record,
+            to_record(&stored.finding, &stored.scan_id, stored.triage_note.clone()),
+        )
+    };
+
+    // A dismissal or an acceptance is recorded against the target so the next
+    // scan honours it. Any other status withdraws a standing exception: moving a
+    // finding back to Open, or marking it Remediated, has to let the re-test
+    // raise it again — that is how a fix is proven rather than asserted.
+    match record {
+        Some(record) => {
+            let kind = record.kind;
+            let view = exceptions::upsert(&record, &state).await;
+            Ok(TriageOutcome {
+                finding: updated,
+                effect: effect_of(kind, view.expires_at.is_some()),
+                exception: Some(view),
+                withdrawn: 0,
+            })
+        }
+        None => {
+            let withdrawn = exceptions::revoke_for(
+                &updated.target_id,
+                &updated.fingerprint,
+                &state,
+            )
+            .await;
+            Ok(TriageOutcome {
+                effect: reopened_effect(&input.new_status, withdrawn),
+                finding: updated,
+                exception: None,
+                withdrawn,
+            })
+        }
     }
-    if input.analyst_name.trim().is_empty() {
-        return Err("The analyst name is required for the audit trail.".into());
+}
+
+/// What the analyst should expect to see on the next scan.
+fn effect_of(kind: ExceptionKind, has_review_date: bool) -> String {
+    match kind {
+        ExceptionKind::FalsePositive => "Recorded against this target. The finding is removed from \
+             every report, and the next scan will apply the same dismissal automatically — you will \
+             not be asked about it again."
+            .to_string(),
+        ExceptionKind::AcceptedRisk => {
+            let tail = if has_review_date {
+                " The acceptance lapses on the review date, at which point the finding returns to the \
+                 open list."
+            } else {
+                " It stands until you withdraw it."
+            };
+            format!(
+                "Recorded against this target. The finding leaves the open counts, the posture score \
+                 and the remediation roadmap, and is disclosed instead in the client report's \
+                 accepted-risk register with this justification.{tail}"
+            )
+        }
     }
+}
 
-    let mut store = state.findings.write().await;
-    let stored = store
-        .get_mut(&input.finding_id)
-        .ok_or_else(|| format!("Finding '{}' not found", input.finding_id))?;
-
-    stored.finding.status = status;
-    // Notes append rather than overwrite: the triage history is audit evidence.
-    let entry = format!(
-        "[{}] {} → {}: {}",
-        Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
-        input.analyst_name.trim(),
-        input.new_status,
-        input.triage_note.trim()
-    );
-    stored.triage_note = Some(match &stored.triage_note {
-        Some(existing) => format!("{existing}\n{entry}"),
-        None => entry,
-    });
-
-    if let Err(e) = state.store.save_finding(&input.finding_id, stored) {
-        log_persist_error("triage decision", &e);
+fn reopened_effect(status: &str, withdrawn: usize) -> String {
+    if withdrawn == 0 {
+        return format!(
+            "Status set to {status}. Nothing is suppressed: the next scan re-tests this weakness, \
+             which is how a fix is confirmed rather than assumed."
+        );
     }
-
-    Ok(to_record(&stored.finding, &stored.scan_id, stored.triage_note.clone()))
+    format!(
+        "Status set to {status}, and {withdrawn} standing exception{} withdrawn. This weakness will \
+         be reported again on the next scan.",
+        if withdrawn == 1 { "" } else { "s" }
+    )
 }
 
 #[cfg(test)]

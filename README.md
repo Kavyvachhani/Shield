@@ -22,9 +22,11 @@ a single priority ranking, and reports written for the two audiences that actual
 
 ## What it does
 
-- **Scans without setup.** A built-in native check engine covers security headers, TLS
-  configuration, cookie flags, CORS policy, exposure surface and content analysis — no
-  external tool required on a fresh machine.
+- **Scans without setup.** A built-in native check engine ships 55 checks covering
+  security headers, TLS configuration, cookie flags, cross-origin isolation, CORS policy,
+  exposure surface, content analysis and information disclosure — including credentials
+  and private keys left in client-delivered JavaScript. No external tool is required on a
+  fresh machine.
 - **Extends with what you have.** Semgrep, Trivy, Gitleaks, OWASP ZAP and Nuclei are
   detected automatically on `PATH` and in the conventional install locations. Missing
   engines are skipped with an explanation rather than failing the run.
@@ -34,12 +36,32 @@ a single priority ranking, and reports written for the two audiences that actual
 - **Ranks by real risk.** Priority combines CVSS 4.0, EPSS probability, CISA KEV
   membership, reachability and exposure — so the list is ordered by what matters, not by
   raw scanner severity.
+- **Triages each weakness once.** Dismissing a false positive or accepting a risk records
+  an exception against the *target*, keyed by a fingerprint that survives a re-scan. The
+  next assessment applies the decision automatically instead of raising the same finding
+  with a new id. An acceptance can carry a review date, after which it lapses and the
+  finding returns to the open list.
+- **States its own confidence.** Every finding says what it was determined from — a live
+  observation, a code match, a declared dependency version — and the specific condition
+  that would make it wrong, so a reviewer can start with the ones worth checking.
 - **Tracks coverage honestly.** All 106 OWASP WSTG test cases are reported with their
   actual state, including checks that passed and those that genuinely need manual
   analysis.
-- **Reports for two audiences.** A client report (posture, plain-language risk,
-  remediation roadmap) and a developer report (location, CVSS vector, CWE/OWASP/WSTG
-  mapping, reproduction, fix and verification). Also exports Markdown, SARIF 2.1.0 and JSON.
+- **Reports for two audiences.** A client report — document control, the controls that
+  were verified and what each protects against, the posture score, the accepted-risk
+  register, standards conformance, evidence handling and a stated limitations section —
+  and a developer report giving location, CVSS vector, CWE/OWASP/WSTG mapping,
+  reproduction, validation confidence, fix and verification. Also exports Markdown,
+  SARIF 2.1.0 and JSON.
+
+### How an exception changes a report
+
+Accepting a risk does not delete it. It moves out of the finding counts, the posture
+score and the remediation roadmap, and into the client report's **Accepted Risk
+Register** — with the justification, the person who accepted it and the review date. A
+dismissed false positive is removed from the deliverables outright, and the count of
+dismissals is disclosed in the assurance section so the report's silence is accounted
+for. Accepted exposure is disclosed, never deleted.
 
 ## Safety model
 

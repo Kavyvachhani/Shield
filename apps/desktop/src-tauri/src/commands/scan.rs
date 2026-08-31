@@ -116,6 +116,7 @@ pub async fn trigger_scan(
     let store_clone = state.store.clone();
     let auth_records_clone = state.auth_records.clone();
     let targets_clone = state.targets.clone();
+    let exceptions_clone = state.exceptions.clone();
     let config_json = input.config_json.unwrap_or_default();
     let run_dast = input.run_dast;
     let run_id_clone = scan_run_id.clone();
@@ -187,6 +188,27 @@ pub async fn trigger_scan(
         let auth_record = auth_records_clone.read().await.get(&target_id_clone).cloned();
         let core_target = build_core_target(&target_rec, auth_record);
 
+        // Decisions the analyst has already taken about this target, indexed
+        // ready to apply as each stage reports. Without this a re-scan raises
+        // every dismissed false positive again with a fresh id, and the analyst
+        // triages the same noise on every run.
+        let register = {
+            let all = exceptions_clone.read().await;
+            sentinel_core::exceptions::ExceptionRegister::for_target(all.values(), &target_id_clone)
+        };
+        if !register.is_empty() {
+            let _ = app.emit(EVENT_LOG, ScanLogPayload {
+                scan_run_id: run_id_clone.clone(),
+                stage: "pipeline".into(),
+                level: "info".into(),
+                message: format!(
+                    "{} standing exception(s) will be applied to this scan's findings",
+                    register.len()
+                ),
+                timestamp: Utc::now(),
+            });
+        }
+
         // The native engine is part of the baseline, not an opt-in extra: it
         // ships inside the app, so a target with no third-party scanners
         // installed still gets a real assessment rather than three skipped
@@ -226,7 +248,7 @@ pub async fn trigger_scan(
         ] {
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
-                stage_name, result, &mut tally,
+                stage_name, result, &mut tally, &register,
             ).await;
         }
 
@@ -244,7 +266,7 @@ pub async fn trigger_scan(
 
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
-                stage_name, stage_result, &mut tally,
+                stage_name, stage_result, &mut tally, &register,
             ).await;
         }
 
@@ -360,6 +382,30 @@ async fn mark_run_crashed(
         }
     }
     err
+}
+
+/// One console line describing what the standing exceptions did to this stage.
+fn exception_summary(applied: &sentinel_core::exceptions::ApplyOutcome) -> String {
+    let mut parts = Vec::new();
+    if applied.false_positives > 0 {
+        parts.push(format!(
+            "{} carried forward as previously dismissed",
+            applied.false_positives
+        ));
+    }
+    if applied.accepted_risks > 0 {
+        parts.push(format!(
+            "{} carried forward as accepted risk",
+            applied.accepted_risks
+        ));
+    }
+    if applied.lapsed > 0 {
+        parts.push(format!(
+            "{} exception(s) have lapsed, so those findings are open again",
+            applied.lapsed
+        ));
+    }
+    format!("Exception register applied: {}", parts.join("; "))
 }
 
 /// Best-effort description of what a panicking task panicked with.
@@ -516,6 +562,9 @@ fn emit_stage_starting(
 /// Persist a completed stage's findings and emit its done/skipped/failed
 /// event pair. Shared by the parallel static-analysis block and the
 /// sequential network-stage loop so both classify and report identically.
+#[allow(clippy::too_many_arguments)] // Every argument is a distinct collaborator
+                                     // the stage needs; bundling them would only
+                                     // move the list somewhere less visible.
 async fn process_stage_result(
     app: &tauri::AppHandle,
     store: &crate::store::Store,
@@ -524,15 +573,46 @@ async fn process_stage_result(
     stage_name: &str,
     result: anyhow::Result<Vec<sentinel_core::models::finding::Finding>>,
     tally: &mut PipelineTally,
+    register: &sentinel_core::exceptions::ExceptionRegister,
 ) {
     use tauri::Emitter;
 
     match result {
-        Ok(raw_findings) => {
+        Ok(mut raw_findings) => {
             let stage_finding_count = raw_findings.len();
+
+            // Apply the analyst's standing decisions before anything is counted
+            // or stored. This is what makes an exception mean something across
+            // scans: the finding is still recorded — the audit trail needs it —
+            // but it arrives already carrying the status that was decided, so
+            // the report layer suppresses or discloses it correctly and nobody
+            // has to triage it a second time.
+            let applied = register.apply(&mut raw_findings, Utc::now());
+            for f in raw_findings.iter_mut() {
+                if let Some(record) = register.covering(f, Utc::now()) {
+                    f.description = format!(
+                        "{}\n\nExempted: {} on {}, recorded by {}.",
+                        f.description,
+                        record.kind.label(),
+                        record.created_at.format("%Y-%m-%d"),
+                        record.raised_by,
+                    );
+                }
+            }
+
             // The stage completed, so its engine counts as coverage even
             // when it produced nothing — a clean pass is a real result.
             tally.record_stage_findings(stage_name, &raw_findings);
+
+            if applied.total_applied() > 0 || applied.lapsed > 0 {
+                let _ = app.emit(EVENT_LOG, ScanLogPayload {
+                    scan_run_id: run_id.to_string(),
+                    stage: stage_name.to_string(),
+                    level: "info".into(),
+                    message: exception_summary(&applied),
+                    timestamp: Utc::now(),
+                });
+            }
 
             // Persist the stage's findings before updating memory, so a
             // crash mid-pipeline still leaves completed stages on disk.
@@ -542,12 +622,15 @@ async fn process_stage_result(
             {
                 let mut store = findings.write().await;
                 for f in raw_findings {
+                    let triage_note = register
+                        .covering(&f, Utc::now())
+                        .map(|record| record.triage_note());
                     store.insert(
                         f.id.to_string(),
                         StoredFinding {
                             scan_id: run_id.to_string(),
                             finding: f,
-                            triage_note: None,
+                            triage_note,
                         },
                     );
                 }

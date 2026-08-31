@@ -12,6 +12,8 @@
 //!   • sensitive file, backup, VCS, admin and diagnostic endpoint exposure
 //!   • CORS policy, HTTP methods, Host header handling, open redirects
 //!   • response body analysis: mixed content, SRI, tabnabbing, error leakage
+//!   • information disclosure: leaked credentials, private key material,
+//!     internal addressing, cloud metadata references, framework versions
 //!
 //! SAFETY GUARANTEES
 //! ─────────────────
@@ -24,6 +26,7 @@
 pub mod active;
 pub mod builder;
 pub mod content;
+pub mod disclosure;
 pub mod exposure;
 pub mod headers;
 pub mod probe;
@@ -50,6 +53,7 @@ pub fn all_specs() -> Vec<&'static builder::CheckSpec> {
         .iter()
         .chain(tls::SPECS)
         .chain(content::SPECS)
+        .chain(disclosure::SPECS)
         .chain(exposure::SPECS)
         .chain(active::SPECS)
         .collect()
@@ -110,6 +114,9 @@ impl ScannerAdapter for NativeCheckAdapter {
 
         // ── 3. Passive body analysis ─────────────────────────────────────────
         findings.extend(content::run(target_id, scan_id, &root));
+
+        // ── 3b. Information disclosure in the delivered content ──────────────
+        findings.extend(disclosure::run(target_id, scan_id, &root));
 
         // ── 4. TLS certificate inspection (HTTPS targets only) ───────────────
         if let Some((host, port)) = https_host_port(&base_url) {

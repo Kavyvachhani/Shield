@@ -8,11 +8,13 @@ use super::charts;
 use super::escape::{href, html, html_multiline, image_data_uri};
 use super::{
     base_stylesheet, footer_html, remediation_window, sort_by_priority, ReportContext,
-    SeverityCounts,
+    ReportFindings, SeverityCounts,
 };
 use crate::checklist::{CheckStatus, CoverageReport};
+use crate::exceptions::{self, ExceptionRecord};
 use crate::models::finding::{Finding, FindingStatus};
 use crate::scoring::priority::PriorityScoringEngine;
+use chrono::Utc;
 
 /// Render the developer report as a self-contained HTML document.
 pub fn render(
@@ -20,8 +22,11 @@ pub fn render(
     findings: &[Finding],
     coverage: Option<&CoverageReport>,
 ) -> String {
-    let sorted = sort_by_priority(findings);
-    let counts = SeverityCounts::of(&sorted);
+    // Accepted risks are not remediation work. They are listed at the end so a
+    // developer knows they exist, but they do not inflate the counts at the top
+    // or the numbered work queue in between.
+    let split = ReportFindings::partition(findings);
+    let counts = split.counts();
 
     format!(
         r##"<!DOCTYPE html>
@@ -34,22 +39,29 @@ pub fn render(
 </head>
 <body>
 <div class="page">
-  <div class="banner">Confidential — technical distribution only</div>
+  <div class="banner">{classification} — technical distribution only</div>
   {header}
+  {triage_guide}
   {index}
   {untested}
   {details}
+  {accepted}
+  {excluded}
   {footer}
 </div>
 </body>
 </html>"##,
         target = html(&ctx.target_name),
+        classification = html(&ctx.classification),
         css = base_stylesheet(),
         extra = extra_stylesheet(),
         header = header(ctx, &counts),
-        index = index_table(&sorted),
+        triage_guide = triage_guide(&split),
+        index = index_table(&split.active),
         untested = untested_section(coverage),
-        details = detail_sections(&sorted),
+        details = detail_sections(&split.active),
+        accepted = accepted_section(ctx, &split),
+        excluded = excluded_section(ctx),
         footer = footer_html(ctx, "Technical Remediation Report"),
     )
 }
@@ -82,7 +94,293 @@ table.index .pill{font-size:10px;padding:2px 7px;max-width:100%}
 /* Keep a row whole; a row split across the page boundary left an orphaned
    fragment ("in response headers") alone on an otherwise blank page. */
 table.index tr{page-break-inside:avoid;break-inside:avoid}
+
+/* Validation panel: the developer's first question about any scanner output is
+   "is this actually real", so the answer gets its own fixed place on every
+   finding rather than an occasional warning box. */
+.validate{display:grid;grid-template-columns:150px 1fr;gap:0;border:1px solid var(--line);
+  border-radius:8px;overflow:hidden;margin:12px 0}
+.validate .score{padding:12px;text-align:center;color:#fff;display:flex;flex-direction:column;
+  justify-content:center}
+.validate .score b{font-size:22px;line-height:1.1}
+.validate .score span{font-size:10px;letter-spacing:.7px;text-transform:uppercase;opacity:.9}
+.validate .body{padding:11px 14px;font-size:12.5px;background:var(--soft)}
+.validate .body p{margin:0 0 6px}
+.validate .body p:last-child{margin-bottom:0}
+.dismiss{border-left:4px solid #64748b;background:#f8fafc;padding:11px 14px;
+  border-radius:0 7px 7px 0;margin:10px 0;font-size:12.5px}
+@media print{.validate,.dismiss{page-break-inside:avoid}}
 "##
+}
+
+/// How confident the engine is that a finding is genuine, and on what basis.
+///
+/// Scanner output is not evidence on its own, and a developer whose first three
+/// tickets were noise stops reading the fourth. Every finding therefore states
+/// what it was determined from and how much of that is direct observation
+/// versus inference, so a real weakness is not lost among things that merely
+/// look like one.
+struct Validation {
+    /// 0–100 confidence that the finding is genuine.
+    confidence: u8,
+    label: &'static str,
+    colour: &'static str,
+    /// How the finding was established.
+    basis: String,
+    /// What would make this a false positive, in this specific case.
+    caveat: &'static str,
+}
+
+fn validation_of(f: &Finding) -> Validation {
+    let fp_confidence = f
+        .ai_triage
+        .as_ref()
+        .map(|t| t.is_false_positive_confidence)
+        .unwrap_or(0.25)
+        .clamp(0.0, 1.0);
+    let confidence = ((1.0 - fp_confidence) * 100.0).round() as u8;
+
+    let tools_lower: Vec<String> = f.source_tools.iter().map(|t| t.to_lowercase()).collect();
+    let is_runtime = tools_lower.iter().any(|t| {
+        t.contains("native") || t.contains("zap") || t.contains("nuclei") || t.contains("dast")
+    });
+    let is_static = tools_lower
+        .iter()
+        .any(|t| t.contains("semgrep") || t.contains("sast") || t.contains("gitleaks"));
+    let is_dependency = tools_lower.iter().any(|t| t.contains("trivy"));
+    let has_evidence = !f.evidences.is_empty();
+    let multi_tool = f.source_tools.len() >= 2;
+
+    let mut basis = if multi_tool && is_runtime && is_static {
+        format!(
+            "Confirmed independently by {} engines, including one that observed it on the running \
+             application and one that located it in the source.",
+            f.source_tools.len()
+        )
+    } else if is_runtime {
+        "Observed directly in a live HTTP or TLS response from the target — the state described below \
+         is what the server actually returned, not an inference about what it might return."
+            .to_string()
+    } else if is_dependency {
+        "Derived from a declared dependency version matched against a public vulnerability database. \
+         The version is a fact; whether the vulnerable code path is reachable from your application \
+         is not established by this check."
+            .to_string()
+    } else if is_static {
+        "Matched by static analysis against the source. The pattern is present in the code; whether \
+         it is reachable with attacker-controlled input at runtime has not been confirmed."
+            .to_string()
+    } else {
+        "Reported by the engine named below.".to_string()
+    };
+
+    if has_evidence {
+        basis.push_str(&format!(
+            " {} evidence artefact{} captured at the time of testing {} attached below, each with a \
+             SHA-256 hash so it can be checked against the engagement record.",
+            f.evidences.len(),
+            if f.evidences.len() == 1 { "" } else { "s" },
+            if f.evidences.len() == 1 { "is" } else { "are" },
+        ));
+    } else {
+        basis.push_str(
+            " No evidence artefact was captured for this finding, so verify it by hand before \
+             scheduling work.",
+        );
+    }
+
+    let caveat = if is_dependency {
+        "the vulnerable function is never called on any reachable path, or the component is already \
+         patched by a distribution backport that leaves the version string unchanged"
+    } else if is_static && !is_runtime {
+        "the matched code is unreachable in production, the input is already validated upstream, or \
+         the pattern is inside test or fixture code"
+    } else if is_runtime {
+        "the behaviour differs on the production edge — a CDN, WAF or reverse proxy that adds the \
+         missing control after this response left the origin"
+    } else {
+        "the engine matched a pattern that does not hold in your deployment"
+    };
+
+    let (label, colour) = match confidence {
+        90..=100 => ("Confirmed", "#166534"),
+        70..=89 => ("High confidence", "#15803d"),
+        45..=69 => ("Needs verification", "#ca8a04"),
+        _ => ("Likely false positive", "#b91c1c"),
+    };
+
+    Validation { confidence, label, colour, basis, caveat }
+}
+
+/// The block that turns "this might be noise" into an action a developer can take.
+fn validation_panel(f: &Finding) -> String {
+    let v = validation_of(f);
+    format!(
+        r##"<div class="validate">
+  <div class="score" style="background:{colour}">
+    <b>{confidence}%</b>
+    <span>{label}</span>
+  </div>
+  <div class="body">
+    <p><strong>How this was determined.</strong> {basis}</p>
+    <p><strong>This is a false positive if</strong> {caveat}. If that is the case, dismiss it in
+    SentinelVAPT with the reason — the dismissal is recorded against the target and is applied
+    automatically to every later scan, so this finding will not come back in the next report.</p>
+  </div>
+</div>"##,
+        colour = v.colour,
+        confidence = v.confidence,
+        label = v.label,
+        basis = html(&v.basis),
+        caveat = v.caveat,
+    )
+}
+
+/// Up-front explanation of how to deal with output that is not a real weakness.
+///
+/// Placed before the findings index because it changes how the list is read: a
+/// developer who knows a dismissal is permanent triages the queue instead of
+/// arguing with it.
+fn triage_guide(split: &ReportFindings) -> String {
+    let unverified = split
+        .active
+        .iter()
+        .filter(|f| validation_of(f).confidence < 70)
+        .count();
+
+    let counts_line = if unverified == 0 {
+        "Every finding in this report was either observed directly on the running application or \
+         confirmed by more than one engine."
+            .to_string()
+    } else {
+        format!(
+            "{unverified} of the {total} findings below are flagged <em>Needs verification</em> or \
+             lower. Start with those: confirming or dismissing them is faster than fixing them, and \
+             it shortens the queue for everyone else.",
+            total = split.active.len(),
+        )
+    };
+
+    format!(
+        r##"<h2>Before You Start — Handling False Positives</h2>
+<p>{counts_line}</p>
+<p>Every finding carries a confidence panel stating what it was determined from and the specific
+condition that would make it wrong. Three outcomes, and only three:</p>
+<table>
+  <thead><tr><th style="width:170px">If it is…</th><th style="width:190px">Mark it</th><th>What happens next</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Real, and you will fix it</strong></td><td><code>In Progress</code> &rarr; <code>Remediated</code></td>
+        <td>Nothing is suppressed. The next scan re-tests it, which is how the fix gets proven rather than assumed.</td></tr>
+    <tr><td><strong>Real, but you are choosing to carry it</strong></td><td><code>Accepted Risk</code></td>
+        <td>It leaves the open counts and the roadmap, and appears in the client report&#39;s accepted-risk register with your justification and a review date. Disclosed, not deleted.</td></tr>
+    <tr><td><strong>Not real</strong></td><td><code>False Positive</code></td>
+        <td>It is removed from every deliverable, and the dismissal is recorded against the target so the next scan applies it automatically. You triage it once.</td></tr>
+  </tbody>
+</table>
+<div class="callout small"><strong>A dismissal needs a reason and a name.</strong> Both are required by the
+tool and both are retained: the point of the register is that a later reader can challenge the judgement,
+which is not possible if the record only says the finding was dismissed.</div>"##
+    )
+}
+
+/// Findings the business has formally accepted — context, not work.
+fn accepted_section(ctx: &ReportContext, split: &ReportFindings) -> String {
+    if split.accepted.is_empty() {
+        return String::new();
+    }
+
+    let now = Utc::now();
+    let register = exceptions::ExceptionRegister::from_records(ctx.exceptions.iter());
+
+    let rows: String = split
+        .accepted
+        .iter()
+        .map(|f| {
+            let record: Option<&ExceptionRecord> = register.covering(f, now);
+            let reason = record
+                .map(|r| html(&r.justification))
+                .unwrap_or_else(|| "See the engagement record.".to_string());
+            let review = record
+                .and_then(|r| r.expires_at)
+                .map(|w| w.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "open-ended".to_string());
+            format!(
+                r##"<tr>
+  <td><span class="pill" style="background:{colour}">{severity}</span></td>
+  <td>{title}<div class="small muted">{cwe}</div></td>
+  <td class="loc small">{component}</td>
+  <td class="small">{reason}</td>
+  <td class="small" style="white-space:nowrap">{owner}<div class="muted">review {review}</div></td>
+</tr>"##,
+                colour = charts::severity_color(&f.severity),
+                severity = charts::severity_name(&f.severity),
+                title = html(&f.title),
+                cwe = html(f.cwe_id.as_deref().unwrap_or("—")),
+                component = html(&truncate(&f.affected_component, 70)),
+                reason = reason,
+                owner = html(&record.map(|r| r.raised_by.clone()).unwrap_or_else(|| "—".into())),
+                review = review,
+            )
+        })
+        .collect();
+
+    format!(
+        r##"<h2 class="page-break">Accepted Risks — No Action Required</h2>
+<p>These weaknesses are real and were confirmed, but the business has formally accepted them. They are here
+so you are not surprised by them in the code or by a scanner run of your own — they are not on the
+remediation queue above.</p>
+<table class="index">
+  <thead><tr>
+    <th style="width:12%">Severity</th><th style="width:28%">Finding</th><th style="width:24%">Location</th>
+    <th style="width:24%">Why it was accepted</th><th style="width:12%">Owner</th>
+  </tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+<div class="callout small">An acceptance with a review date lapses on that date. When it does, the finding
+returns to the open queue on the next scan rather than staying suppressed indefinitely.</div>"##
+    )
+}
+
+/// What was dismissed as noise, so the report's silence is accounted for.
+fn excluded_section(ctx: &ReportContext) -> String {
+    let dismissals = ctx.active_dismissals();
+    if dismissals.is_empty() {
+        return String::new();
+    }
+
+    let rows: String = dismissals
+        .iter()
+        .map(|r| {
+            format!(
+                r##"<tr>
+  <td>{title}</td>
+  <td class="loc small">{component}</td>
+  <td class="small">{reason}</td>
+  <td class="small" style="white-space:nowrap">{who}<div class="muted">{when}</div></td>
+</tr>"##,
+                title = html(&r.title),
+                component = html(&truncate(&r.affected_component, 70)),
+                reason = html(&r.justification),
+                who = html(&r.raised_by),
+                when = r.created_at.format("%Y-%m-%d"),
+            )
+        })
+        .collect();
+
+    format!(
+        r##"<h2>Dismissed as False Positives</h2>
+<p>The observations below were raised by an engine, reviewed, and judged not to be genuine weaknesses. They
+are excluded from the findings above and from the client report. They are listed here so the exclusion is
+visible and reviewable rather than silent — if one of these is wrong, reopen it in SentinelVAPT and it
+returns to the queue on the next scan.</p>
+<table class="index">
+  <thead><tr>
+    <th style="width:30%">Observation</th><th style="width:26%">Location</th>
+    <th style="width:30%">Why it was dismissed</th><th style="width:14%">Dismissed by</th>
+  </tr></thead>
+  <tbody>{rows}</tbody>
+</table>"##
+    )
 }
 
 fn header(ctx: &ReportContext, counts: &SeverityCounts) -> String {
@@ -153,11 +451,13 @@ still require manual analysis.</div>"##
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            format!(
+            let v = validation_of(f);
+                format!(
                 r##"<tr>
   <td style="text-align:center"><a href="#f{n}">{n}</a></td>
   <td><span class="pill" style="background:{color}">{severity}</span></td>
   <td style="text-align:center;font-weight:600">{score:.1}</td>
+  <td style="text-align:center;font-weight:600;color:{vcolour}">{confidence}%<div class="small muted" style="font-weight:400">{vlabel}</div></td>
   <td class="title">{title}</td>
   <td class="loc">{component}</td>
   <td class="small">{cwe}</td>
@@ -167,6 +467,9 @@ still require manual analysis.</div>"##
                 color = charts::severity_color(&f.severity),
                 severity = charts::severity_name(&f.severity),
                 score = f.priority_score,
+                vcolour = v.colour,
+                confidence = v.confidence,
+                vlabel = v.label,
                 title = html(&f.title),
                 component = html(&truncate(&f.affected_component, 70)),
                 cwe = html(f.cwe_id.as_deref().unwrap_or("—")),
@@ -182,8 +485,9 @@ still require manual analysis.</div>"##
         r##"<h2>Findings Index</h2>
 <table class="index">
   <thead><tr>
-    <th style="width:4%">#</th><th style="width:14%">Severity</th><th style="width:8%">Priority</th>
-    <th style="width:27%">Finding</th><th style="width:27%">Location</th>
+    <th style="width:4%">#</th><th style="width:12%">Severity</th><th style="width:7%">Priority</th>
+    <th style="width:11%">Confidence</th>
+    <th style="width:24%">Finding</th><th style="width:22%">Location</th>
     <th style="width:10%">CWE</th><th style="width:10%">Status</th>
   </tr></thead>
   <tbody>{rows}</tbody>
@@ -371,22 +675,19 @@ fn detail_section(n: usize, f: &Finding) -> String {
         format!(r##"<div class="section-label">References</div><ul class="small">{items}</ul>"##)
     };
 
-    let triage = f
+    // Every finding gets the validation panel, not only the doubtful ones: a
+    // developer needs to know a finding is solid just as much as they need to
+    // know it is shaky, and a box that appears only on bad news teaches the
+    // reader to skim past the good news too.
+    let triage = validation_panel(f);
+
+    // The engine's own triage note, when it recorded one, sits under the panel.
+    let triage_note = f
         .ai_triage
         .as_ref()
-        .filter(|t| t.is_false_positive_confidence >= 0.4)
-        .map(|t| {
-            format!(
-                r##"<div class="warn small"><strong>Triage note.</strong> Automated analysis rates this
-{pct:.0}% likely to be a false positive{notes}. Confirm before scheduling remediation work.</div>"##,
-                pct = t.is_false_positive_confidence * 100.0,
-                notes = t
-                    .triage_notes
-                    .as_deref()
-                    .map(|n| format!(" — {}", html(n)))
-                    .unwrap_or_default(),
-            )
-        })
+        .and_then(|t| t.triage_notes.as_deref())
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| format!(r##"<div class="small muted">Engine note: {}</div>"##, html(n)))
         .unwrap_or_default();
 
     format!(
@@ -405,6 +706,7 @@ fn detail_section(n: usize, f: &Finding) -> String {
   </div>
 
   {triage}
+  {triage_note}
 
   <div class="section-label">Location</div>
   <pre>{component}</pre>
@@ -429,7 +731,9 @@ fn detail_section(n: usize, f: &Finding) -> String {
 
   <div class="section-label">Verification</div>
   <p class="small">After deploying the fix, repeat the reproduction steps above and confirm the observed
-  behaviour has changed. Then re-run the assessment and confirm this finding no longer appears.</p>
+  behaviour has changed. Then re-run the assessment: the finding disappearing from the next report is the
+  proof the fix landed. Marking it <code>Remediated</code> by hand does <em>not</em> suppress the re-test —
+  that is deliberate, so a fix is confirmed rather than asserted.</p>
 
   {references}
 
@@ -444,6 +748,7 @@ fn detail_section(n: usize, f: &Finding) -> String {
         severity = charts::severity_name(&f.severity),
         score = f.priority_score,
         triage = triage,
+        triage_note = triage_note,
         component = html(&f.affected_component),
         description = html_multiline(&f.description),
         rationale = html(&rationale),
@@ -671,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn a_high_false_positive_score_surfaces_a_triage_warning() {
+    fn a_doubtful_finding_is_labelled_and_the_engine_note_carried_through() {
         let mut f = finding("Maybe", Severity::Medium, 5.0);
         f.ai_triage = Some(AITriage {
             is_false_positive_confidence: 0.75,
@@ -679,11 +984,13 @@ mod tests {
             triage_notes: Some("path looks like a test fixture".into()),
         });
         let out = render(&ctx(), &[f], None);
-        assert!(out.contains("75% likely to be a false positive"));
+        assert!(out.contains("25%"), "confidence is the complement of the false-positive score");
+        assert!(out.contains("Likely false positive"));
+        assert!(out.contains("path looks like a test fixture"), "the engine's reasoning must reach the reader");
     }
 
     #[test]
-    fn a_low_false_positive_score_does_not_warn() {
+    fn a_directly_observed_finding_is_reported_as_confirmed() {
         let mut f = finding("Confirmed", Severity::High, 8.0);
         f.ai_triage = Some(AITriage {
             is_false_positive_confidence: 0.02,
@@ -691,7 +998,65 @@ mod tests {
             triage_notes: None,
         });
         let out = render(&ctx(), &[f], None);
-        assert!(!out.contains("likely to be a false positive"));
+        assert!(out.contains("98%"));
+        assert!(out.contains("Confirmed"));
+        assert!(!out.contains("Likely false positive"));
+    }
+
+    /// The panel is the point: a developer must always be told the basis, not
+    /// only when the engine happens to doubt itself.
+    #[test]
+    fn every_finding_carries_a_validation_panel_and_a_way_out() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(out.contains("How this was determined"));
+        assert!(out.contains("This is a false positive if"));
+        assert!(out.contains("will not come back in the next report"));
+    }
+
+    #[test]
+    fn the_report_explains_the_three_triage_outcomes_before_the_queue() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(out.contains("Handling False Positives"));
+        for status in ["In Progress", "Accepted Risk", "False Positive"] {
+            assert!(out.contains(status), "the guide must name the {status} outcome");
+        }
+        assert!(
+            out.find("Handling False Positives") < out.find("Findings Index"),
+            "the guide has to come before the queue it changes how you read"
+        );
+    }
+
+    /// Static analysis and a live observation are not the same kind of claim,
+    /// and a developer deciding what to trust needs the difference stated.
+    #[test]
+    fn the_basis_distinguishes_a_live_observation_from_a_code_match() {
+        let mut runtime = finding("Missing HSTS", Severity::Medium, 5.0);
+        runtime.source_tools = vec!["Sentinel Native".into()];
+        assert!(validation_of(&runtime).basis.contains("Observed directly"));
+
+        let mut static_only = finding("Tainted sink", Severity::High, 7.0);
+        static_only.source_tools = vec!["Semgrep SAST".into()];
+        let v = validation_of(&static_only);
+        assert!(v.basis.contains("static analysis"));
+        assert!(v.caveat.contains("unreachable"), "a SAST match needs its own caveat");
+
+        let mut dependency = finding("CVE in lodash", Severity::High, 7.5);
+        dependency.source_tools = vec!["Trivy".into()];
+        assert!(validation_of(&dependency).basis.contains("dependency version"));
+    }
+
+    #[test]
+    fn two_engines_agreeing_raises_the_stated_basis() {
+        let mut f = finding("SQL injection", Severity::Critical, 9.4);
+        f.source_tools = vec!["Semgrep SAST".into(), "OWASP ZAP".into()];
+        assert!(validation_of(&f).basis.contains("Confirmed independently"));
+    }
+
+    #[test]
+    fn a_finding_with_no_evidence_says_so_rather_than_implying_proof() {
+        let mut f = finding("Unproven", Severity::Medium, 5.0);
+        f.evidences.clear();
+        assert!(validation_of(&f).basis.contains("No evidence artefact"));
     }
 
     #[test]

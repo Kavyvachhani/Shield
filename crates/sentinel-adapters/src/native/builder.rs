@@ -121,12 +121,9 @@ impl NativeFinding {
             status: FindingStatus::Open,
             source_tools: vec!["Sentinel Native".to_string()],
             ai_triage: Some(AITriage {
-                // Directly observed configuration state, not inference.
-                is_false_positive_confidence: 0.02,
+                is_false_positive_confidence: fp_confidence(spec.id),
                 cluster_id: Some(format!("CLUSTER_{}", spec.cwe)),
-                triage_notes: Some(
-                    "Observed directly from the live HTTP/TLS response; not inferred.".to_string(),
-                ),
+                triage_notes: Some(triage_note(spec.id).to_string()),
             }),
             created_at: chrono::Utc::now(),
         }
@@ -142,6 +139,88 @@ impl NativeFinding {
             content: content.to_string(),
             hash: format!("{:x}", hasher.finalize()),
         }
+    }
+}
+
+/// How likely a check is to be wrong, and why — per check, not one number for
+/// all of them.
+///
+/// Every native finding used to declare a 2% chance of being a false positive.
+/// For most of the engine that is honest: a missing response header either was
+/// or was not in the bytes the server returned. It is not honest for the checks
+/// whose result is an *inference* from an observation — an `Allow` header
+/// advertising a method that the application layer may well reject, a keyword
+/// appearing in an HTML comment, a hostname reflected in a response with no
+/// proof that anything downstream trusts it. Reporting those at the same
+/// confidence as a directly observed header teaches the reader to distrust the
+/// whole document.
+///
+/// The figures below are the engine's own judgement of its evidence, and they
+/// drive the confidence panel in the developer report so a reviewer can start
+/// with the findings most likely to need a second look.
+pub fn fp_confidence(spec_id: &str) -> f64 {
+    match spec_id {
+        // Advertised, not proven: `Allow` lists what the server will parse, and
+        // application-layer routing frequently rejects the method anyway.
+        "NATIVE-DANGEROUS-METHODS" => 0.35,
+        // Reflection is necessary for host-header poisoning but not sufficient;
+        // whether a cache or a password-reset mail actually trusts the value is
+        // not established by a single request.
+        "NATIVE-HOST-HEADER-INJECTION" => 0.35,
+        // Every current browser implies `noopener` for `target="_blank"`, so
+        // this only matters for the long tail of older clients.
+        "NATIVE-TABNABBING" => 0.35,
+        // A keyword inside a comment; the surrounding text decides whether it
+        // is a leak or a coincidence.
+        "NATIVE-COMMENT-LEAK" => 0.30,
+        // A page under /admin that renders a login form may be the intended,
+        // properly protected front door.
+        "NATIVE-ADMIN-INTERFACE" => 0.25,
+        // Published API documentation is a deliberate choice for many products.
+        "NATIVE-API-DOCS-EXPOSED" => 0.25,
+        // A reachable diagnostic path is not necessarily an unauthenticated one.
+        "NATIVE-DEBUG-ENDPOINT" => 0.20,
+        // Session detection is a name heuristic: a long-lived cookie called
+        // "user_theme" is not a session.
+        "NATIVE-SESSION-LIFETIME" => 0.20,
+        "NATIVE-COOKIE-SAMESITE" | "NATIVE-COOKIE-HTTPONLY" | "NATIVE-COOKIE-INSECURE" => 0.10,
+        // A marker match in the body; a page can legitimately discuss an error.
+        "NATIVE-STACK-TRACE" => 0.12,
+        // A same-organisation CDN is often an intentional trust relationship.
+        "NATIVE-SRI-MISSING" => 0.15,
+        // The origin may be fronted by an edge that adds the control after this
+        // response left it, which a direct probe cannot see.
+        "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => 0.08,
+        // Everything else is read straight out of the response or the
+        // certificate: it either was there or it was not.
+        _ => 0.02,
+    }
+}
+
+/// The engine's own note on what its evidence does and does not establish.
+fn triage_note(spec_id: &str) -> &'static str {
+    match spec_id {
+        "NATIVE-DANGEROUS-METHODS" => "The server advertised these methods in its OPTIONS response. \
+Advertising is not the same as accepting: confirm against a real route before treating this as exploitable.",
+        "NATIVE-HOST-HEADER-INJECTION" => "The submitted hostname was reflected. Impact depends on \
+whether a cache, a redirect or an outbound email downstream trusts that value; that is not established here.",
+        "NATIVE-TABNABBING" => "Current browsers imply rel=noopener for target=_blank, so the practical \
+exposure is limited to older clients.",
+        "NATIVE-COMMENT-LEAK" => "A sensitive keyword was matched inside an HTML comment. Read the \
+surrounding text before acting — the word may be incidental.",
+        "NATIVE-ADMIN-INTERFACE" => "A conventional administrative path responded with a page matching a \
+login signature. Whether it is adequately protected is not determined by reachability alone.",
+        "NATIVE-API-DOCS-EXPOSED" => "API documentation is reachable anonymously. For a public API this \
+may be deliberate; for an internal one it is an inventory disclosure.",
+        "NATIVE-DEBUG-ENDPOINT" => "A diagnostic endpoint responded. Confirm whether it is reachable \
+without authentication from outside your network before scheduling work.",
+        "NATIVE-SESSION-LIFETIME" => "The cookie was classified as session-bearing by its name. If it \
+carries a preference rather than session state, this is not a finding.",
+        "NATIVE-SRI-MISSING" => "The script is loaded from another origin without an integrity hash. If \
+that origin is under your own control the risk is lower, but not zero.",
+        "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => "Observed on the response from this endpoint. If a \
+CDN or WAF rewrites headers at the edge, confirm the production response before acting.",
+        _ => "Observed directly from the live HTTP/TLS response; not inferred.",
     }
 }
 
@@ -192,6 +271,31 @@ mod tests {
         // Computed from the vector above, not declared beside it.
         assert_eq!(f.cvss4.unwrap().base_score, 6.9);
         assert_eq!(f.references.len(), 1);
+    }
+
+    /// A number that is the same for every check is not a confidence estimate.
+    #[test]
+    fn inference_based_checks_declare_lower_confidence_than_observed_ones() {
+        let observed = fp_confidence("NATIVE-HSTS-MISSING");
+        let inferred = fp_confidence("NATIVE-DANGEROUS-METHODS");
+        assert!(observed < 0.05, "a missing header is read straight off the wire");
+        assert!(inferred > observed * 5.0, "an advertised method is a weaker claim");
+        assert!(
+            (0.0..=1.0).contains(&fp_confidence("NATIVE-COMMENT-LEAK")),
+            "confidence must stay a probability"
+        );
+    }
+
+    #[test]
+    fn every_check_carries_a_note_saying_what_its_evidence_proves() {
+        for id in ["NATIVE-DANGEROUS-METHODS", "NATIVE-TABNABBING", "NATIVE-HSTS-MISSING"] {
+            assert!(!triage_note(id).trim().is_empty(), "{id} has no triage note");
+        }
+        assert_ne!(
+            triage_note("NATIVE-DANGEROUS-METHODS"),
+            triage_note("NATIVE-HSTS-MISSING"),
+            "an inference and an observation must not read identically"
+        );
     }
 
     #[test]

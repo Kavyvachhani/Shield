@@ -18,6 +18,15 @@ pub struct GenerateReportInput {
     pub analyst: Option<String>,
     /// Base64 `data:image/...` logo. Non-image or remote values are ignored.
     pub logo_data_uri: Option<String>,
+    /// Who reviewed the report before issue, for the document-control table.
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
+    /// Document classification, e.g. "Confidential" or "Restricted".
+    #[serde(default)]
+    pub classification: Option<String>,
+    /// Report revision, e.g. "1.0".
+    #[serde(default)]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -272,6 +281,28 @@ async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>)
             ctx.analyst = analyst.clone();
         }
     }
+    // Blank strings arrive from cleared form fields; treating one as a value
+    // would blank out the classification banner on every page of the report.
+    ctx.reviewed_by = input.reviewed_by.clone().filter(|v| !v.trim().is_empty());
+    if let Some(v) = input.classification.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        ctx.classification = v.to_string();
+    }
+    if let Some(v) = input.revision.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        ctx.revision = v.to_string();
+    }
+
+    // The exception register for this target. It drives the accepted-risk
+    // register in the client report and the dismissal appendix in the developer
+    // report, so an exception is disclosed rather than silently applied.
+    if let Some(run) = &run {
+        ctx.exceptions = {
+            let all = state.exceptions.read().await;
+            all.values()
+                .filter(|e| e.target_id == run.target_id)
+                .cloned()
+                .collect()
+        };
+    }
 
     if let Some(run) = &run {
         ctx.assessment_start = run.started_at;
@@ -396,7 +427,7 @@ mod tests {
 
     #[test]
     fn a_finding_dismissed_as_a_false_positive_never_reaches_a_report() {
-        let all = vec![
+        let all = [
             stored("s1", "real", FindingStatus::Open),
             stored("s1", "bogus", FindingStatus::FalsePositive),
         ];
@@ -410,7 +441,7 @@ mod tests {
     /// who accepted it.
     #[test]
     fn accepted_and_remediated_findings_stay_in_the_report() {
-        let all = vec![
+        let all = [
             stored("s1", "accepted", FindingStatus::AcceptedRisk),
             stored("s1", "fixed", FindingStatus::Remediated),
             stored("s1", "working", FindingStatus::InProgress),
@@ -420,7 +451,7 @@ mod tests {
 
     #[test]
     fn only_the_requested_scan_is_included() {
-        let all = vec![
+        let all = [
             stored("s1", "mine", FindingStatus::Open),
             stored("s2", "other", FindingStatus::Open),
         ];
