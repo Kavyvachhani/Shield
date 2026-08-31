@@ -12,3 +12,6 @@
 # Keyring & local DB
 *.sqlite
 *.db
+
+# Byte-compiled Python from the brand-asset generator.
+scripts/__pycache__/

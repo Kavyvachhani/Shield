@@ -107,14 +107,27 @@ npm ci
 npm run tauri build
 ```
 
-Tauri links against each platform's native webview, so installers must be built on the
-platform they target — a Windows `.exe` cannot be cross-compiled from macOS or Linux.
+Tauri links against each platform's native webview, so the supported path is to build
+each installer on the platform it targets.
 
 - **On Windows**, run `scripts\build-windows.ps1`. It checks the toolchain, runs the
   tests, and builds both the `.exe` wizard and the `.msi`.
 - **In CI**, the `.github/workflows/release.yml` workflow builds all three platforms.
   Push a `v*` tag to cut a release, or run it manually from the Actions tab and leave
-  the platform choice on `windows` for a Windows-only build.
+  the platform choice on `windows` for a Windows-only build. **This is what a release
+  should use.**
+- **From macOS**, `scripts/build-windows-from-macos.sh` produces the Windows `.exe`
+  without a Windows machine, using `cargo-xwin` for the MSVC headers and import
+  libraries and a local `makensis` for the installer. Tauri labels this experimental;
+  it yields an unsigned NSIS installer only, no `.msi`, and nothing in the resulting
+  build has been executed on Windows. Good for getting a testable build in front of
+  someone quickly, not for cutting a release.
+
+  One trap is worth knowing about: if Homebrew's `rust` formula is installed, its
+  `rustc` shadows rustup's on `PATH` and has no Windows sysroot, so the build fails
+  with ``can't find crate for `core` `` while `rustup target list --installed` insists
+  the target is there. The script puts `~/.cargo/bin` first and refuses to run if the
+  wrong `rustc` is still winning.
 
 ## Development
 
