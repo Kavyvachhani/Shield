@@ -239,10 +239,15 @@ pub async fn list_reports(
 ///
 /// Every other status is kept. `Accepted Risk` and `Remediated` are decisions
 /// *about* a real finding, and a report that dropped them would hide accepted
-/// exposure from the very people accepting it.
+/// exposure from the very people accepting it. The report layer then splits
+/// them out: an accepted risk leaves the counts, the posture score and the
+/// roadmap, and is printed instead in the accepted-risk register with its
+/// justification and owner. Disclosed, not deleted.
 ///
 /// Coverage is derived from this same list, so a dismissed finding also stops
-/// marking its WSTG test case as failed.
+/// marking its WSTG test case as failed — while an accepted one does not. That
+/// asymmetry is deliberate: the weakness is still there, and a coverage matrix
+/// claiming the check passed would contradict the register three pages later.
 async fn reportable_findings(scan_id: &str, state: &State<'_, AppState>) -> Vec<Finding> {
     let store = state.findings.read().await;
     select_reportable(store.values(), scan_id)
