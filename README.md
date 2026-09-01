@@ -41,9 +41,15 @@ a single priority ranking, and reports written for the two audiences that actual
   links-per-page so an unbounded URL space cannot stall a scan. Findings that describe the
   deployment rather than a page — a missing header, a cookie flag — collapse to one entry
   listing every affected URL, instead of one identical row per page.
-- **Extends with what you have.** Semgrep, Trivy, Gitleaks, OWASP ZAP and Nuclei are
-  detected automatically on `PATH` and in the conventional install locations. Missing
-  engines are skipped with an explanation rather than failing the run.
+- **Extends with what you have.** Ten external engines are detected automatically on
+  `PATH` and in the conventional install locations — Semgrep, Trivy, OSV-Scanner,
+  Gitleaks, TruffleHog, retire.js, OWASP ZAP, Nuclei and Nikto. Missing engines are
+  skipped with an explanation rather than failing the run, and the coverage matrix
+  records which checks went unanswered as a result.
+- **Runs overlapping engines on purpose.** Trivy and OSV-Scanner use different
+  vulnerability databases; Gitleaks finds credential-shaped strings while TruffleHog
+  asks the provider whether they still authenticate. Two engines confirming one weakness
+  is a stronger claim than either alone, and deduplication reflects that in the ranking.
 - **Scans behind a login.** Supply a session cookie, HTTP Basic credentials, a bearer
   token or an API key header, and the native engine assesses the authenticated pages
   too. Secrets live in the OS keychain, never in the engagement database or a report.

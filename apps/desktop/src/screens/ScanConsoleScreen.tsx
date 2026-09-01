@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal } from 'lucide-react';
-import type { Target, AuthorizationRecord, ScanLogPayload } from '../types';
+import type {
+  Target, AuthorizationRecord, ScanLogPayload, ScanStage, StageState,
+} from '../types';
 import { api, events } from '../lib/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 
@@ -9,9 +11,6 @@ interface Props {
   authRecord: AuthorizationRecord | null;
   onScanComplete: (scanRunId: string) => void;
 }
-
-type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
-type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'native' | 'zap_dast' | 'nuclei_dast';
 
 interface StageStatus {
   stage: ScanStage;
@@ -30,9 +29,13 @@ const STAGE_DEFS: StageStatus[] = [
   { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'osv',         label: 'OSV-Scanner SCA',    stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'trufflehog',  label: 'TruffleHog Verified',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'retirejs',    label: 'retire.js Libraries',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
   { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'nikto_dast',  label: 'Nikto Web Server',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
 ];
 
 // How long to wait for the first engine event before warning. The pipeline

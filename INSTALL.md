@@ -98,7 +98,19 @@ chmod +x SentinelVAPT_0.3.0_amd64.AppImage && ./SentinelVAPT_0.3.0_amd64.AppImag
 
 SentinelVAPT ships **Sentinel Native**, a built-in check engine that requires no
 installation and works on a fresh machine. Everything below is optional and extends
-coverage further.
+coverage further. A missing engine is **skipped, not failed** — the coverage matrix
+records which WSTG cases went unanswered because of it, so the gap is visible in the
+report rather than silently absent.
+
+Two pairs are deliberately run together rather than one instead of the other:
+
+- **Trivy + OSV-Scanner** use different vulnerability databases. A CVE both report is a
+  stronger claim than one either reports alone, and deduplication raises the finding's
+  reachability when two engines confirm it.
+- **Gitleaks + TruffleHog** answer different questions. Gitleaks finds strings that look
+  like credentials; TruffleHog asks the provider whether they still authenticate. A
+  verified secret is Critical and cannot be an example key or a rotated one — which is
+  what makes the rest of the secret findings triageable.
 
 | Engine | Type | Ships with the app? | Install |
 |---|---|---|---|
@@ -108,6 +120,10 @@ coverage further.
 | **Gitleaks** | Secret detection | No | `winget install Gitleaks.Gitleaks` · `brew install gitleaks` |
 | **OWASP ZAP** | DAST — active scanning | No | [zaproxy.org](https://www.zaproxy.org/download/), run `zap.sh -daemon` |
 | **Nuclei** | DAST — template scanning | No | `go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` |
+| **OSV-Scanner** | SCA — a second vulnerability database | No | `go install github.com/google/osv-scanner/cmd/osv-scanner@v1` · `brew install osv-scanner` |
+| **TruffleHog** | Secrets — verified against the provider | No | `brew install trufflehog` · [releases](https://github.com/trufflesecurity/trufflehog/releases) |
+| **retire.js** | Vulnerable client-side JS libraries | No | `npm install -g retire` |
+| **Nikto** | Web server misconfiguration and forgotten files | No | `brew install nikto` · `apt install nikto` |
 
 SentinelVAPT finds these automatically on PATH, and also checks the conventional
 install locations — Chocolatey and Scoop shims, `%ProgramFiles%`, `~/go/bin`,

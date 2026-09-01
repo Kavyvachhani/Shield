@@ -436,17 +436,53 @@ mod tests {
         assert!(info_pos < conf_pos);
     }
 
+    /// Every engine the catalogue names, so "full coverage" means full coverage
+    /// rather than "coverage by the engines someone remembered to list".
+    fn all_engines() -> Vec<String> {
+        use catalog::engine;
+        let mut names: Vec<String> = catalog::WSTG_CATALOG
+            .iter()
+            .flat_map(|item| item.engines.iter())
+            .filter(|e| **e != engine::ANALYST)
+            .map(|e| (*e).to_string())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     #[test]
     fn automated_coverage_never_counts_manual_items() {
-        let engines: Vec<String> = vec![
-            "Sentinel Native".into(), "OWASP ZAP".into(), "Nuclei".into(),
-            "Semgrep".into(), "Trivy".into(), "Gitleaks".into(),
-        ];
-        let report = ChecklistEngine::assess(&engines, &[]);
+        let report = ChecklistEngine::assess(&all_engines(), &[]);
         assert_eq!(
             report.automated_coverage_pct, 100.0,
             "with every engine present all automatable checks are exercised"
         );
         assert!(report.manual_required > 0, "manual items must remain outstanding");
+    }
+
+    /// The list is derived from the catalogue rather than hardcoded, so adding
+    /// an engine cannot leave this test asserting yesterday's coverage.
+    #[test]
+    fn the_engine_list_is_derived_from_the_catalogue_itself() {
+        let engines = all_engines();
+        for expected in ["Sentinel Native", "OWASP ZAP", "Nuclei", "Semgrep", "Trivy",
+                         "Gitleaks", "OSV-Scanner", "TruffleHog", "retire.js", "Nikto"] {
+            assert!(engines.contains(&expected.to_string()), "{expected} is not referenced by any check");
+        }
+        assert!(!engines.contains(&"Analyst".to_string()), "the analyst is not an automated engine");
+    }
+
+    /// An engine that is installed but covers nothing would silently contribute
+    /// no coverage, which is the failure mode this guards.
+    #[test]
+    fn each_new_engine_actually_contributes_coverage() {
+        for engine in ["OSV-Scanner", "TruffleHog", "retire.js", "Nikto"] {
+            let alone = ChecklistEngine::assess(&[engine.to_string()], &[]);
+            assert!(
+                alone.passed > 0,
+                "{engine} is installed but answers no checklist item"
+            );
+        }
     }
 }

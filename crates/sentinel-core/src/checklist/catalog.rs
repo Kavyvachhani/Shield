@@ -43,6 +43,15 @@ pub mod engine {
     pub const SEMGREP: &str = "Semgrep";
     pub const TRIVY: &str = "Trivy";
     pub const GITLEAKS: &str = "Gitleaks";
+    /// Dependency vulnerabilities from Google's OSV database. Runs alongside
+    /// Trivy: two databases disagreeing usefully is the point.
+    pub const OSV: &str = "OSV-Scanner";
+    /// Secrets verified against the provider rather than pattern-matched.
+    pub const TRUFFLEHOG: &str = "TruffleHog";
+    /// Vulnerable libraries in the JavaScript the browser actually receives.
+    pub const RETIREJS: &str = "retire.js";
+    /// Web server misconfiguration and forgotten-file discovery.
+    pub const NIKTO: &str = "Nikto";
     pub const ANALYST: &str = "Analyst";
 }
 
@@ -105,7 +114,13 @@ const E_ZAP_NUCLEI: &[&str] = &[engine::ZAP, engine::NUCLEI];
 const E_ZAP_SEMGREP: &[&str] = &[engine::ZAP, engine::SEMGREP];
 const E_SEMGREP: &[&str] = &[engine::SEMGREP];
 const E_SEMGREP_ZAP_NUCLEI: &[&str] = &[engine::SEMGREP, engine::ZAP, engine::NUCLEI];
-const E_TRIVY: &[&str] = &[engine::TRIVY];
+/// Two independent vulnerability databases. A CVE both report is a stronger
+/// claim than one either reports alone, and dedup raises reachability when it
+/// sees two engines confirm the same weakness.
+const E_SCA: &[&str] = &[engine::TRIVY, engine::OSV];
+/// Pattern matching plus provider verification. Gitleaks finds candidates;
+/// TruffleHog establishes which of them currently authenticate.
+const E_SECRETS: &[&str] = &[engine::GITLEAKS, engine::TRUFFLEHOG];
 const E_ANALYST: &[&str] = &[engine::ANALYST];
 const E_NATIVE_ANALYST: &[&str] = &[engine::NATIVE, engine::ANALYST];
 const E_SEMGREP_ANALYST: &[&str] = &[engine::SEMGREP, engine::ANALYST];
@@ -197,7 +212,8 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CONF-02", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Test Application Platform Configuration",
-        coverage: Automated, engines: E_NATIVE_NUCLEI, owasp_2025: A02, cwe: "CWE-16",
+        coverage: Automated, engines: &[engine::NATIVE, engine::NUCLEI, engine::NIKTO],
+        owasp_2025: A02, cwe: "CWE-16",
         client_summary: "Check the application platform for debug modes, sample files and unsafe defaults.",
     },
     ChecklistItem {
@@ -209,13 +225,14 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CONF-04", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Review Old Backup and Unreferenced Files for Sensitive Information",
-        coverage: Automated, engines: E_NATIVE, owasp_2025: A02, cwe: "CWE-530",
+        coverage: Automated, engines: &[engine::NATIVE, engine::NIKTO], owasp_2025: A02, cwe: "CWE-530",
         client_summary: "Look for forgotten backups, archives and version-control folders left on the server.",
     },
     ChecklistItem {
         id: "WSTG-CONF-05", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Enumerate Infrastructure and Application Admin Interfaces",
-        coverage: Automated, engines: E_NATIVE_NUCLEI, owasp_2025: A01, cwe: "CWE-284",
+        coverage: Automated, engines: &[engine::NATIVE, engine::NUCLEI, engine::NIKTO],
+        owasp_2025: A01, cwe: "CWE-284",
         client_summary: "Find administrative consoles that are reachable from the public internet.",
     },
     ChecklistItem {
@@ -793,14 +810,20 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "SV-SUPPLY-01", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Known-Vulnerable Third-Party Dependencies",
-        coverage: Automated, engines: E_TRIVY, owasp_2025: A03, cwe: "CWE-1395",
+        coverage: Automated, engines: E_SCA, owasp_2025: A03, cwe: "CWE-1395",
         client_summary: "Cross-check every third-party library against public vulnerability databases.",
     },
     ChecklistItem {
         id: "SV-SUPPLY-02", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Hardcoded Secrets and Credential Leakage",
-        coverage: Automated, engines: &[engine::GITLEAKS], owasp_2025: A04, cwe: "CWE-798",
+        coverage: Automated, engines: E_SECRETS, owasp_2025: A04, cwe: "CWE-798",
         client_summary: "Search the codebase for passwords, API keys and tokens committed by mistake.",
+    },
+    ChecklistItem {
+        id: "SV-SUPPLY-03", category_code: "CLNT", category: "Client-Side",
+        name: "Known-Vulnerable Client-Side Libraries",
+        coverage: Automated, engines: &[engine::RETIREJS], owasp_2025: A03, cwe: "CWE-1395",
+        client_summary: "Check the JavaScript the browser actually receives for library versions with published vulnerabilities.",
     },
 ];
 

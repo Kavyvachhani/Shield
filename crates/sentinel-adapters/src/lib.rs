@@ -11,6 +11,12 @@ pub mod semgrep;
 pub mod trivy;
 pub mod gitleaks;
 
+// Additional engines: dependency vulnerabilities from a second database,
+// verified secrets, client-side library versions, and web server discovery.
+// Every one is optional — a missing binary is skipped and recorded as a
+// coverage gap rather than failing the scan.
+pub mod external_tools;
+
 // DAST adapters (always use via AuthGatedDastRunner)
 pub mod zap;
 pub mod nuclei;

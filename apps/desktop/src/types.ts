@@ -143,7 +143,11 @@ export interface CoverageReport {
 }
 
 export type ScanRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type ScanStage = 'semgrep' | 'trivy' | 'gitleaks' | 'native' | 'zap_dast' | 'nuclei_dast';
+export type ScanStage =
+  | 'semgrep' | 'trivy' | 'gitleaks' | 'osv' | 'trufflehog' | 'retirejs'
+  | 'native'
+  | 'zap_dast' | 'nuclei_dast' | 'nikto_dast'
+  | 'pipeline';
 export type StageState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface ScanRun {

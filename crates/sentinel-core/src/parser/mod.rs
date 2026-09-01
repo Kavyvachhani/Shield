@@ -1,3 +1,8 @@
+pub mod external;
+pub mod osv;
+pub mod retirejs;
+pub mod trufflehog;
+pub mod nikto;
 pub mod sarif;
 pub mod semgrep;
 pub mod trivy;

@@ -711,11 +711,15 @@ mod tests {
 
     #[test]
     fn a_clean_fully_covered_assessment_scores_strong() {
-        let coverage = crate::checklist::ChecklistEngine::assess(
-            &["Sentinel Native".into(), "OWASP ZAP".into(), "Nuclei".into(),
-              "Semgrep".into(), "Trivy".into(), "Gitleaks".into()],
-            &[],
-        );
+        // Derived from the catalogue rather than hardcoded: adding an engine
+        // must not leave this test asserting yesterday's full coverage.
+        let engines: Vec<String> = crate::checklist::catalog::WSTG_CATALOG
+            .iter()
+            .flat_map(|item| item.engines.iter())
+            .filter(|e| **e != crate::checklist::catalog::engine::ANALYST)
+            .map(|e| (*e).to_string())
+            .collect();
+        let coverage = crate::checklist::ChecklistEngine::assess(&engines, &[]);
         let p = PostureScore::compute(&SeverityCounts::default(), Some(&coverage));
         assert_eq!(p.band, PostureBand::Strong);
         assert_eq!(p.score, 100.0);

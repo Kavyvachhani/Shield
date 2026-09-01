@@ -15,7 +15,19 @@ pub struct TriggerScanInput {
 /// Stages that run on every scan. Semgrep, Trivy and Gitleaks need a source
 /// repository and skip without one; Sentinel Native needs only the target URL,
 /// so it is what makes a URL-only engagement produce results at all.
-const BASELINE_STAGES: &[&str] = &["semgrep", "trivy", "gitleaks", "native"];
+const BASELINE_STAGES: &[&str] = &[
+    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "native",
+];
+
+/// The static analysers, which run concurrently.
+///
+/// They read local files, touch no network and share no state, so running them
+/// one after another was pure wasted wall clock — on a real repository each can
+/// take a minute on its own. Network stages stay sequential below: they all
+/// make requests to the same target, and running them together would let their
+/// combined traffic exceed the rate limit the RoE agreed, which is a safety
+/// guarantee rather than a performance setting.
+const STATIC_STAGES: usize = 6;
 
 /// How long any single stage may run before the pipeline abandons it.
 ///
@@ -24,7 +36,7 @@ const BASELINE_STAGES: &[&str] = &["semgrep", "trivy", "gitleaks", "native"];
 const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Stages added when the analyst opts into active DAST.
-const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast"];
+const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast", "nikto_dast"];
 
 /// Running totals a pipeline accumulates as its stages report.
 ///
@@ -231,20 +243,29 @@ pub async fn trigger_scan(
         // requests to the same target, and running them concurrently would
         // let their combined traffic exceed the RoE's agreed rate limit,
         // which is a safety guarantee, not just a performance one.
-        debug_assert_eq!(&stages[..3], &["semgrep", "trivy", "gitleaks"]);
+        debug_assert_eq!(
+            &stages[..STATIC_STAGES],
+            &["semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs"]
+        );
 
-        for (idx, stage_name) in stages[..3].iter().enumerate() {
+        for (idx, stage_name) in stages[..STATIC_STAGES].iter().enumerate() {
             emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
         }
-        let (semgrep_result, trivy_result, gitleaks_result) = tokio::join!(
+        let (semgrep_result, trivy_result, gitleaks_result, osv_result, trufflehog_result, retirejs_result) = tokio::join!(
             run_stage_bounded("semgrep", &core_target, &config_json),
             run_stage_bounded("trivy", &core_target, &config_json),
             run_stage_bounded("gitleaks", &core_target, &config_json),
+            run_stage_bounded("osv", &core_target, &config_json),
+            run_stage_bounded("trufflehog", &core_target, &config_json),
+            run_stage_bounded("retirejs", &core_target, &config_json),
         );
         for (stage_name, result) in [
             ("semgrep", semgrep_result),
             ("trivy", trivy_result),
             ("gitleaks", gitleaks_result),
+            ("osv", osv_result),
+            ("trufflehog", trufflehog_result),
+            ("retirejs", retirejs_result),
         ] {
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
@@ -252,8 +273,8 @@ pub async fn trigger_scan(
             ).await;
         }
 
-        for (offset, stage_name) in stages[3..].iter().enumerate() {
-            let idx = offset + 3;
+        for (offset, stage_name) in stages[STATIC_STAGES..].iter().enumerate() {
+            let idx = offset + STATIC_STAGES;
             emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
 
             // A stage that never returns takes the whole pipeline with it: no
@@ -506,8 +527,14 @@ async fn run_stage_for(
         "native"      => AuthGatedDastRunner::new(sentinel_adapters::native::NativeCheckAdapter).run(target, config_json).await,
         "trivy"       => sentinel_adapters::trivy::TrivyAdapter.run(target, config_json).await,
         "gitleaks"    => sentinel_adapters::gitleaks::GitleaksAdapter.run(target, config_json).await,
+        "osv"         => sentinel_adapters::external_tools::OsvScannerAdapter.run(target, config_json).await,
+        "trufflehog"  => sentinel_adapters::external_tools::TruffleHogAdapter.run(target, config_json).await,
+        "retirejs"    => sentinel_adapters::external_tools::RetireJsAdapter.run(target, config_json).await,
         "zap_dast"    => AuthGatedDastRunner::new(sentinel_adapters::zap::ZapDastAdapter).run(target, config_json).await,
         "nuclei_dast" => AuthGatedDastRunner::new(sentinel_adapters::nuclei::NucleiDastAdapter).run(target, config_json).await,
+        // Nikto reaches the network, so it goes through the gate like every
+        // other engine that does.
+        "nikto_dast"  => AuthGatedDastRunner::new(sentinel_adapters::external_tools::NiktoAdapter).run(target, config_json).await,
         other => Err(anyhow::anyhow!("Unknown stage: {}", other)),
     }
 }
@@ -704,9 +731,13 @@ fn engine_name(stage: &str) -> &'static str {
         "semgrep" => "Semgrep",
         "trivy" => "Trivy",
         "gitleaks" => "Gitleaks",
+        "osv" => "OSV-Scanner",
+        "trufflehog" => "TruffleHog",
+        "retirejs" => "retire.js",
         "native" => "Sentinel Native",
         "zap_dast" => "OWASP ZAP",
         "nuclei_dast" => "Nuclei",
+        "nikto_dast" => "Nikto",
         _ => "Unknown",
     }
 }
@@ -717,9 +748,13 @@ fn engine_label(stage: &str) -> &'static str {
         "semgrep" => "Semgrep SAST",
         "trivy" => "Trivy dependency audit",
         "gitleaks" => "Gitleaks secret scan",
+        "osv" => "OSV-Scanner dependency audit",
+        "trufflehog" => "TruffleHog verified secrets",
+        "retirejs" => "retire.js client library audit",
         "native" => "Sentinel Native checks",
         "zap_dast" => "OWASP ZAP DAST",
         "nuclei_dast" => "Nuclei DAST",
+        "nikto_dast" => "Nikto web server scan",
         _ => "Unknown stage",
     }
 }

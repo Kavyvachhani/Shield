@@ -1,4 +1,14 @@
-use crate::models::finding::Finding;
+use crate::models::finding::{Finding, Severity};
+
+fn severity_word(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "Critical",
+        Severity::High => "High",
+        Severity::Medium => "Medium",
+        Severity::Low => "Low",
+        Severity::Info => "Informational",
+    }
+}
 
 pub struct PriorityScoringEngine;
 
@@ -15,7 +25,7 @@ impl PriorityScoringEngine {
     ///   • Reachability: 0.7 (SAST unconfirmed) to 1.2 (SAST+DAST verified)
     ///   • Asset exposure: 0.8 (internal) to 1.2 (internet-facing)
     pub fn calculate_priority_score(finding: &Finding) -> f64 {
-        let cvss_base  = finding.cvss4.as_ref().map(|c| c.base_score).unwrap_or(5.0);
+        let cvss_base = Self::base_score(finding);
         let epss_score = finding.epss.as_ref().map(|e| e.score).unwrap_or(0.0);
         let epss_factor     = 1.0 + (0.3 * epss_score);
         let kev_multiplier  = if finding.kev_listed { 1.35 } else { 1.0 };
@@ -34,8 +44,7 @@ impl PriorityScoringEngine {
     /// Executive report:  this string is translated to plain business language
     ///   by the report engine (see `explain_executive`).
     pub fn explain(finding: &Finding) -> String {
-        let cvss_base  = finding.cvss4.as_ref().map(|c| c.base_score).unwrap_or(5.0);
-        let cvss_vec   = finding.cvss4.as_ref().map(|c| c.vector_string.as_str()).unwrap_or("—");
+        let cvss_base = Self::base_score(finding);
         let epss       = finding.epss.as_ref().map(|e| e.score).unwrap_or(0.0);
         let epss_pct   = (epss * 100.0).round() as u32;
         let epss_percentile = finding.epss.as_ref().map(|e| e.percentile * 100.0).unwrap_or(0.0);
@@ -67,12 +76,40 @@ impl PriorityScoringEngine {
 
         let source_list = finding.source_tools.join(" + ");
 
+        // Where the base number came from, stated rather than implied. A
+        // finding from a tool that reports only a severity band used to print
+        // as "CVSS4 5.0 (—)", which asserts a measurement nobody made.
+        let basis = match finding.cvss4.as_ref() {
+            Some(c) if !c.vector_string.trim().is_empty() => {
+                format!("CVSS4 {cvss_base:.1} ({})", c.vector_string)
+            }
+            Some(_) => format!("CVSS4 {cvss_base:.1} (score supplied without a vector)"),
+            None => format!(
+                "{cvss_base:.1} from the {} severity band reported by {} — no CVSS 4.0 vector was supplied",
+                severity_word(&finding.severity),
+                finding.source_tools.first().map(String::as_str).unwrap_or("the engine"),
+            ),
+        };
+
         format!(
-            "Priority {score:.1}/10 — CVSS4 {cvss_base:.1} ({cvss_vec}) × \
+            "Priority {score:.1}/10 — {basis} × \
              EPSS {epss_pct}% (top {epss_percentile:.0}th percentile) × \
              {kev_part} × {reach_part} × {exposure_part}. \
              Confirmed by: {source_list}."
         )
+    }
+
+    /// The base number the priority score is built on.
+    ///
+    /// A measured CVSS 4.0 base score where one exists; otherwise a
+    /// representative score for the severity band the reporting tool assigned.
+    /// The old fallback was a flat 5.0 regardless of severity, which ranked a
+    /// tool-reported Critical identically to a tool-reported Low.
+    pub fn base_score(finding: &Finding) -> f64 {
+        match finding.cvss4.as_ref() {
+            Some(c) => c.base_score,
+            None => crate::parser::external::base_score_for(&finding.severity),
+        }
     }
 
     /// Plain-language executive rationale (no vectors, no percentiles).
