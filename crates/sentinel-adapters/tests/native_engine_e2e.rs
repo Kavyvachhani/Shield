@@ -103,6 +103,27 @@ fn bad_response(path: &str, origin: Option<&str>) -> String {
             &["Content-Type: text/plain".to_string()],
             "User-agent: *\nDisallow: /internal-admin/\nDisallow: /backups/\n",
         ),
+        // Linked from the root, and carrying a weakness the root does not.
+        // Nothing but discovery can reach it, so a finding here proves the
+        // engine walked the application rather than assessing one page.
+        "/reports/quarterly" => http(
+            "200 OK",
+            &["Content-Type: text/html".to_string()],
+            r#"<!DOCTYPE html><html><body>
+<h1>Quarterly</h1>
+<a href="/reports/quarterly/export">Export</a>
+<pre>Traceback (most recent call last):
+  File "/srv/app/reports.py", line 88, in render
+    total = rows[0]/ 0
+ZeroDivisionError: division by zero</pre>
+</body></html>"#,
+        ),
+        // Two links deep: only reachable from /reports/quarterly.
+        "/reports/quarterly/export" => http(
+            "200 OK",
+            &["Content-Type: text/html".to_string()],
+            r#"<!DOCTYPE html><html><body>Export</body></html>"#,
+        ),
         _ => {
             let mut headers = vec![
                 "Content-Type: text/html".to_string(),
@@ -125,6 +146,7 @@ fn bad_response(path: &str, origin: Option<&str>) -> String {
 </head><body>
 <!-- TODO: remove hardcoded password admin123 before launch -->
 <a href="https://external.example.test" target="_blank">External</a>
+<a href="/reports/quarterly">Quarterly report</a>
 <form action="/login"><input type="password" name="p" autocomplete="on"></form>
 <script>
 // AKIAIOSFODNN7EXAMPLE is AWS's own published documentation key. It is on
@@ -283,6 +305,58 @@ async fn misconfigured_server_yields_the_expected_findings() {
     assert!(
         !has(&findings, "Mixed Content"),
         "mixed content must not be reported for a plaintext page"
+    );
+}
+
+/// Before discovery existed the engine fetched the site root and nothing else,
+/// so a weakness one link away was invisible and the report said the
+/// application was clean because its front page was.
+#[tokio::test]
+async fn a_weakness_only_reachable_by_following_a_link_is_found() {
+    let findings = scan(Posture::Bad).await;
+
+    let trace = findings
+        .iter()
+        .find(|f| f.title.contains("Stack Trace"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the linked page's traceback was not found — discovery did not run (all: {:?})",
+                findings.iter().map(|f| &f.title).collect::<Vec<_>>()
+            )
+        });
+
+    assert!(
+        trace.affected_component.contains("/reports/quarterly"),
+        "the finding must name the page it was actually observed on, not the root: {}",
+        trace.affected_component
+    );
+}
+
+/// A configuration issue present on every page is one decision made once. If
+/// the crawl turned it into one finding per page, the severity counts would
+/// describe the crawl rather than the application.
+#[tokio::test]
+async fn a_site_wide_misconfiguration_is_reported_once_with_its_instances() {
+    let findings = scan(Posture::Bad).await;
+
+    let csp: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.title.contains("Content-Security-Policy Header Absent"))
+        .collect();
+
+    assert_eq!(
+        csp.len(),
+        1,
+        "a missing header across several pages must collapse to one finding, got {}",
+        csp.len()
+    );
+
+    // And it must be attributed to the origin, so its identity — and therefore
+    // any exception recorded against it — does not depend on crawl order.
+    assert!(
+        !csp[0].affected_component.contains("/reports/"),
+        "a deployment-wide finding must not be pinned to whichever page was crawled first: {}",
+        csp[0].affected_component
     );
 }
 

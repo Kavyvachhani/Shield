@@ -162,6 +162,21 @@ generate activity in that account's audit log.
    disabled by configuration.
 3. **Scan Console** — start the pipeline and watch stages stream live. Missing
    scanners are skipped with an explanation rather than failing the run.
+
+   **Engine config** opens a JSON panel for per-scan tuning; leave it blank and the
+   defaults apply. Note that `rateLimitRps` is a ceiling *request* — the engine takes
+   the lower of it and the rate in the signed RoE, so it can slow a scan but never
+   speed it past what was agreed. The native engine's discovery is tunable here too:
+
+   ```json
+   {
+     "crawl": { "enabled": true, "maxPages": 120, "maxDepth": 3,
+                "budgetSeconds": 300, "maxLinksPerPage": 60 }
+   }
+   ```
+
+   Raise `maxPages` and `maxDepth` for a thorough assessment of a large application;
+   set `enabled` to `false` to assess only the entry page as a quick smoke test.
 4. **Findings** — review findings ranked by priority score
    (CVSS 4.0 × EPSS × CISA KEV × reachability × exposure), filter, and triage. Each
    finding shows a validation confidence: what it was determined from, and the

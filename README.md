@@ -27,6 +27,14 @@ a single priority ranking, and reports written for the two audiences that actual
   exposure surface, content analysis and information disclosure — including credentials
   and private keys left in client-delivered JavaScript. No external tool is required on a
   fresh machine.
+- **Assesses the whole application, not the front page.** The engine walks the target
+  same-origin, breadth-first, and runs every passive check against each page it reaches —
+  so a policy set on `/` but missing on `/admin`, or a key compiled into a lazily loaded
+  bundle, is actually found. Discovery is `GET`-only, scope-checked before each socket
+  opens, held to the RoE rate limit, and bounded by page count, depth, wall clock and
+  links-per-page so an unbounded URL space cannot stall a scan. Findings that describe the
+  deployment rather than a page — a missing header, a cookie flag — collapse to one entry
+  listing every affected URL, instead of one identical row per page.
 - **Extends with what you have.** Semgrep, Trivy, Gitleaks, OWASP ZAP and Nuclei are
   detected automatically on `PATH` and in the conventional install locations. Missing
   engines are skipped with an explanation rather than failing the run.

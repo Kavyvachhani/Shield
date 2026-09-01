@@ -344,6 +344,55 @@ impl TrivyConfig {
 
 /// Master per-scan configuration. Deserialized from `config_json` in each adapter.
 /// All limits come from the signed AuthorizationRecord; defaults are conservative.
+/// How far the native engine walks the application before assessing it.
+///
+/// The engine used to fetch the site root and nothing else, so every passive
+/// check described one page. These bounds exist because a real application's
+/// URL space is effectively unbounded — a calendar, a faceted search or a
+/// paginated list will generate links forever — and a scanner that walks into
+/// one never returns a report at all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrawlConfig {
+    /// Walk the application at all. Off, only the site root is assessed —
+    /// which is the pre-crawl behaviour, kept for a quick smoke test.
+    #[serde(default = "CrawlConfig::default_enabled")]
+    pub enabled: bool,
+    /// Maximum documents fetched, including the root. Default: 120.
+    #[serde(default = "CrawlConfig::default_max_pages")]
+    pub max_pages: usize,
+    /// How many links deep to follow from the entry point. Default: 3.
+    #[serde(default = "CrawlConfig::default_max_depth")]
+    pub max_depth: usize,
+    /// Wall-clock ceiling for discovery, in seconds. Default: 300.
+    #[serde(default = "CrawlConfig::default_budget")]
+    pub budget_seconds: u64,
+    /// Maximum links taken from any one page, so a sitemap-like index cannot
+    /// fill the queue by itself. Default: 60.
+    #[serde(default = "CrawlConfig::default_links_per_page")]
+    pub max_links_per_page: usize,
+}
+
+impl CrawlConfig {
+    pub fn default_enabled() -> bool { true }
+    pub fn default_max_pages() -> usize { 120 }
+    pub fn default_max_depth() -> usize { 3 }
+    pub fn default_budget() -> u64 { 300 }
+    pub fn default_links_per_page() -> usize { 60 }
+}
+
+impl Default for CrawlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Self::default_enabled(),
+            max_pages: Self::default_max_pages(),
+            max_depth: Self::default_max_depth(),
+            budget_seconds: Self::default_budget(),
+            max_links_per_page: Self::default_links_per_page(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DastConfig {
     // ── Shared RoE limits ────────────────────────────────────────────────────
@@ -401,6 +450,10 @@ pub struct DastConfig {
     // ── Trivy ────────────────────────────────────────────────────────────────
     #[serde(default)]
     pub trivy: TrivyConfig,
+
+    // ── Native engine discovery ──────────────────────────────────────────────
+    #[serde(default)]
+    pub crawl: CrawlConfig,
 }
 
 impl Default for DastConfig {
@@ -421,6 +474,7 @@ impl Default for DastConfig {
             nuclei_templates_path: None,
             semgrep: SemgrepConfig::default(),
             trivy: TrivyConfig::default(),
+            crawl: CrawlConfig::default(),
         }
     }
 }

@@ -24,8 +24,10 @@
 //! • Out-of-scope hosts and paths are refused before a socket is opened.
 
 pub mod active;
+pub mod aggregate;
 pub mod builder;
 pub mod content;
+pub mod crawl;
 pub mod disclosure;
 pub mod exposure;
 pub mod headers;
@@ -109,14 +111,43 @@ impl ScannerAdapter for NativeCheckAdapter {
         };
         tracing::info!(status = root.status, "Sentinel Native: root document fetched");
 
-        // ── 2. Passive header, cookie and CSP analysis ───────────────────────
-        findings.extend(headers::run(target_id, scan_id, &root));
+        // ── 2. Walk the application ──────────────────────────────────────────
+        //
+        // Every passive check below used to see exactly this one document, so
+        // the engine reported on the front page and called it an assessment. A
+        // policy set on `/` and absent on `/admin`, a stack trace on one API
+        // route, a key compiled into a lazily loaded bundle — none of it was
+        // reachable, and a clean result meant only that the entry point was
+        // clean.
+        let crawl = if cfg.crawl.enabled {
+            crawl::discover(&probe, root, crawl_limits(&cfg)).await
+        } else {
+            crawl::Crawl {
+                pages: vec![root],
+                not_visited: Vec::new(),
+                external_hosts: Vec::new(),
+                stopped_because: crawl::StopReason::Exhausted,
+            }
+        };
+        tracing::info!(
+            pages = crawl.pages.len(),
+            not_visited = crawl.not_visited.len(),
+            external_hosts = crawl.external_hosts.len(),
+            reason = ?crawl.stopped_because,
+            "Sentinel Native: discovery complete"
+        );
 
-        // ── 3. Passive body analysis ─────────────────────────────────────────
-        findings.extend(content::run(target_id, scan_id, &root));
+        // ── 3. Passive analysis, on every page discovered ────────────────────
+        let mut passive: Vec<Finding> = Vec::new();
+        for page in &crawl.pages {
+            passive.extend(headers::run(target_id, scan_id, page));
+            passive.extend(content::run(target_id, scan_id, page));
+            passive.extend(disclosure::run(target_id, scan_id, page));
+        }
 
-        // ── 3b. Information disclosure in the delivered content ──────────────
-        findings.extend(disclosure::run(target_id, scan_id, &root));
+        // A hundred pages missing the same header is one misconfiguration, not
+        // a hundred findings; a credential in each of two bundles is two.
+        findings.extend(aggregate::collapse(passive, &base_url, &all_specs()));
 
         // ── 4. TLS certificate inspection (HTTPS targets only) ───────────────
         if let Some((host, port)) = https_host_port(&base_url) {
@@ -135,7 +166,11 @@ impl ScannerAdapter for NativeCheckAdapter {
         }
 
         // ── 5. Safe active checks ────────────────────────────────────────────
-        findings.extend(active::run(&probe, target_id, scan_id, &base_url, &root).await);
+        // These probe the origin itself — transport, CORS, methods, Host
+        // handling, redirects — so they run once against the entry document
+        // rather than per page.
+        let root = crawl.pages.first().expect("the crawl always contains the root document");
+        findings.extend(active::run(&probe, target_id, scan_id, &base_url, root).await);
 
         // ── 6. Sensitive path and metafile exposure ──────────────────────────
         findings.extend(exposure::run(&probe, target_id, scan_id, &base_url).await);
@@ -151,6 +186,16 @@ impl ScannerAdapter for NativeCheckAdapter {
             "Sentinel Native: assessment complete"
         );
         Ok(findings)
+    }
+}
+
+/// Translate the scan's crawl configuration into the crawler's own limits.
+fn crawl_limits(cfg: &DastConfig) -> crawl::CrawlLimits {
+    crawl::CrawlLimits {
+        max_pages: cfg.crawl.max_pages.max(1),
+        max_depth: cfg.crawl.max_depth,
+        budget: std::time::Duration::from_secs(cfg.crawl.budget_seconds),
+        max_links_per_page: cfg.crawl.max_links_per_page,
     }
 }
 
