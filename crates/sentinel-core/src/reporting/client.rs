@@ -1496,6 +1496,59 @@ mod tests {
         assert!(!out.contains("Confidential — prepared for"));
     }
 
+    /// A scan-information record, as the native engine emits one.
+    fn surface_record() -> Finding {
+        let mut f = finding("Assessment Surface — What This Scan Reached", Severity::Info, 0.0);
+        f.kind = crate::models::finding::FindingKind::ScanInformation;
+        f.description = "87 page(s) were fetched and assessed; the page limit was reached, so \
+some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not reached."
+            .into();
+        f.evidences = vec![
+            crate::models::finding::Evidence {
+                evidence_type: "assessment_surface".into(),
+                title: "Pages assessed (87)".into(),
+                content: "https://dev.example.com/\nhttps://dev.example.com/account".into(),
+                hash: String::new(),
+            },
+            crate::models::finding::Evidence {
+                evidence_type: "assessment_surface".into(),
+                title: "Third-party origins referenced (2)".into(),
+                content: "cdn.example.net\nanalytics.example.net".into(),
+                hash: String::new(),
+            },
+        ];
+        f
+    }
+
+    /// A clean result is only meaningful next to how much was looked at, and
+    /// this section is the only place the report says it.
+    #[test]
+    fn the_assurance_section_states_how_much_was_reached() {
+        let out = render(&ctx(), &[surface_record()], None);
+
+        assert!(out.contains("How much of the application was reached"));
+        assert!(out.contains("87 page(s) were fetched"));
+        assert!(out.contains("12 in-scope URL(s) were queued but not reached"));
+        assert!(out.contains("Pages assessed (87)"));
+        assert!(out.contains("cdn.example.net"), "third-party origins must be listed");
+        assert!(out.contains("behind a login"), "the limits of crawling must be stated");
+    }
+
+    /// It is a statement about the scan, not a weakness. If it reached the
+    /// counts, every report would carry an issue nobody can remediate.
+    #[test]
+    fn the_surface_record_is_not_reported_as_a_finding() {
+        let out = render(&ctx(), &[surface_record()], None);
+        assert!(out.contains("No security weaknesses were identified"));
+        assert!(out.contains("No actionable weaknesses were identified"));
+    }
+
+    #[test]
+    fn no_surface_record_means_no_such_section() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(!out.contains("How much of the application was reached"));
+    }
+
     #[test]
     fn the_owasp_rollup_shows_every_category_including_the_clean_ones() {
         let mut f = finding("Missing CSP", Severity::Medium, 5.3);

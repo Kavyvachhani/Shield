@@ -1460,6 +1460,56 @@ mod tests {
         assert!(!out.contains("SHA-256 </div>"));
     }
 
+    /// A scan-information record, as the native engine emits one.
+    fn surface_record() -> Finding {
+        let mut f = finding("Assessment Surface — What This Scan Reached", Severity::Info, 0.0);
+        f.kind = crate::models::finding::FindingKind::ScanInformation;
+        f.description = "87 page(s) were fetched and assessed; the page limit was reached, so \
+some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not reached."
+            .into();
+        f.evidences = vec![
+            crate::models::finding::Evidence {
+                evidence_type: "assessment_surface".into(),
+                title: "Pages assessed (87)".into(),
+                content: "https://dev.example.com/\nhttps://dev.example.com/account".into(),
+                hash: String::new(),
+            },
+            crate::models::finding::Evidence {
+                evidence_type: "assessment_surface".into(),
+                title: "Third-party origins referenced (2)".into(),
+                content: "cdn.example.net\nanalytics.example.net".into(),
+                hash: String::new(),
+            },
+        ];
+        f
+    }
+
+    #[test]
+    fn the_surface_section_precedes_the_conclusions_a_reader_would_draw() {
+        let out = render(&ctx(), &[surface_record(), finding("XSS", Severity::High, 8.0)], None);
+
+        assert!(out.contains("Assessment Surface"));
+        assert!(out.contains("87 page(s) were fetched"));
+        // The sentence wraps across a source line, so match a fragment that
+        // cannot straddle the break.
+        assert!(out.contains("evidence rather than evidence of absence"));
+        assert!(
+            out.find("Assessment Surface") < out.find("Finding Detail"),
+            "the reader has to know the reach before reading the findings"
+        );
+    }
+
+    #[test]
+    fn the_surface_record_never_appears_in_the_findings_index() {
+        let out = render(&ctx(), &[surface_record(), finding("XSS", Severity::High, 8.0)], None);
+        // One finding in the queue, not two.
+        assert!(out.contains("No findings to remediate") || out.contains("XSS"));
+        assert!(
+            !out.contains(r#"<td class="title">Assessment Surface"#),
+            "scan information is not remediation work"
+        );
+    }
+
     #[test]
     fn an_empty_assessment_says_so_rather_than_rendering_an_empty_table() {
         let out = render(&ctx(), &[], None);

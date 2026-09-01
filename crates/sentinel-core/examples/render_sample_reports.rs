@@ -237,6 +237,52 @@ fn main() {
     .expect("a dismissal creates an exception");
     debug_assert_eq!(dismissed.kind, ExceptionKind::FalsePositive);
 
+    // What the scan reached. Emitted by the native engine on every run as scan
+    // information rather than as a finding, so it never touches the counts —
+    // the sample carries one so the coverage narrative is exercised here too.
+    let mut surface = finding(Sample {
+        title: "Assessment Surface — What This Scan Reached",
+        severity: Severity::Info,
+        cvss: 0.0,
+        cwe: "CWE-1059",
+        owasp: "A02:2025-Security Misconfiguration",
+        wstg: "WSTG-INFO-01",
+        component: "https://dev.example.com",
+        kev: false,
+        epss: 0.0,
+    });
+    surface.kind = FindingKind::ScanInformation;
+    surface.description = "87 page(s) were fetched and assessed; the page limit was reached, so \
+some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not reached."
+        .to_string();
+    surface.evidences = vec![
+        Evidence {
+            evidence_type: "assessment_surface".into(),
+            title: "Pages assessed (87)".into(),
+            content: "https://dev.example.com/\nhttps://dev.example.com/account\n\
+                      https://dev.example.com/reports\nhttps://dev.example.com/settings"
+                .into(),
+            hash: String::new(),
+        },
+        Evidence {
+            evidence_type: "assessment_surface".into(),
+            title: "In-scope URLs not reached (12)".into(),
+            content: "https://dev.example.com/archive/2019\nhttps://dev.example.com/archive/2020".into(),
+            hash: String::new(),
+        },
+        Evidence {
+            evidence_type: "assessment_surface".into(),
+            title: "Third-party origins referenced (3)".into(),
+            content: "cdn.example.net\nanalytics.example.net\nfonts.example.net\n\n\
+                      These are outside the authorised scope and were not tested. Each one is code \
+                      or content the application trusts at run time, so each is a supply-chain \
+                      dependency worth reviewing."
+                .into(),
+            hash: String::new(),
+        },
+    ];
+    findings.push(surface);
+
     let engines = vec!["Sentinel Native".to_string(), "OWASP ZAP".to_string()];
     let coverage = ChecklistEngine::assess(&engines, &findings);
 
