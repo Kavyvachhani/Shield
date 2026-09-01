@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-adapters"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3698,7 +3698,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3715,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-db"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3731,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-desktop"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3751,7 +3751,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "sentinel-adapters",
