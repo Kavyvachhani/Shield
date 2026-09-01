@@ -4,7 +4,7 @@ use sentinel_core::checklist::{ChecklistEngine, CoverageReport};
 use sentinel_core::models::finding::{Finding, FindingStatus};
 use sentinel_core::reporting::{ReportContext, ReportEngine};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Manager, State};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +209,137 @@ pub async fn export_report(
         .map_err(|e| format!("Failed to write '{}': {e}", path.display()))?;
 
     Ok(format!("Report exported to {}", path.display()))
+}
+
+/// The URI scheme the print window loads a report through.
+///
+/// A report is served over a custom protocol rather than handed to the webview
+/// as a `data:` URL or a temp file. Both alternatives fail somewhere: Chromium —
+/// and therefore WebView2 on Windows — blocks top-level navigation to `data:`
+/// outright, and a temp file needs a filesystem scope wide enough to be worth
+/// avoiding. A protocol handler also lets the response carry a real
+/// `Content-Security-Policy` header rather than a meta tag, which is what makes
+/// the guarantee below enforceable.
+pub const REPORT_SCHEME: &str = "sentinel-report";
+
+/// Serve a generated report to the print window.
+///
+/// Reports are built from data observed on the assessed target, so the response
+/// is locked down: no script may run, nothing may be fetched, and the document
+/// cannot be framed. The report engine already emits script-free HTML — there
+/// is a test asserting it — but that is an invariant of the generator, and this
+/// is the boundary where the document stops being ours and starts being
+/// rendered, so it is enforced here too.
+pub fn serve_report(
+    state: &AppState,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let id = request
+        .uri()
+        .path()
+        .trim_start_matches('/')
+        .to_string();
+
+    let body = state
+        .reports
+        .try_read()
+        .ok()
+        .and_then(|reports| reports.get(&id).map(|r| r.html_content.clone()));
+
+    match body {
+        Some(html) => tauri::http::Response::builder()
+            .status(200)
+            .header("Content-Type", "text/html; charset=utf-8")
+            .header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
+                 font-src 'none'; script-src 'none'; object-src 'none'; frame-ancestors 'none'",
+            )
+            .header("X-Content-Type-Options", "nosniff")
+            .body(html.into_bytes())
+            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+        None => tauri::http::Response::builder()
+            .status(404)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(format!("No report '{id}' is loaded in this session.").into_bytes())
+            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+    }
+}
+
+/// Open a generated report in its own window and raise the system print dialog,
+/// which is where "Save as PDF" lives on every desktop platform.
+///
+/// This replaces a `window.print()` call made from the report's iframe. That
+/// call is a silent no-op in WKWebView — macOS has never implemented it — so
+/// "Save as PDF" appeared to do nothing at all on a Mac while working on
+/// Windows, where WebView2 is Chromium. `WebviewWindow::print` goes to the
+/// platform's own print operation on all three backends instead, so the button
+/// behaves the same everywhere.
+///
+/// The window is left open rather than closed after printing. The print dialog
+/// reports neither its destination nor whether the user cancelled, so closing
+/// on a signal that does not exist would sometimes destroy the document while
+/// the user was still choosing a filename; leaving it up also means a cancelled
+/// print can simply be retried.
+#[tauri::command]
+pub async fn print_report(
+    report_id: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let title = {
+        let reports = state.reports.read().await;
+        let report = reports
+            .get(&report_id)
+            .ok_or_else(|| format!("Report '{report_id}' is no longer loaded — generate it again."))?;
+        format!("{} — {}", report.company_name, report.report_type)
+    };
+
+    // Reuse the window if one is already open, so repeated presses do not stack
+    // up identical windows the user then has to close one by one.
+    if let Some(existing) = app.get_webview_window(PRINT_WINDOW_LABEL) {
+        let _ = existing.close();
+    }
+
+    let url = print_window_url(&report_id)
+        .map_err(|e| format!("Could not build the report URL: {e}"))?;
+
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        PRINT_WINDOW_LABEL,
+        tauri::WebviewUrl::CustomProtocol(url),
+    )
+    .title(title)
+    .inner_size(900.0, 1100.0)
+    .resizable(true)
+    .build()
+    .map_err(|e| format!("Could not open the print window: {e}"))?;
+
+    // The document has to be laid out before the print operation captures it;
+    // printing the instant the window is created yields a blank first page.
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+
+    window
+        .print()
+        .map_err(|e| format!("The system print dialog could not be opened: {e}"))?;
+
+    Ok(())
+}
+
+const PRINT_WINDOW_LABEL: &str = "sentinel-report-print";
+
+/// The URL the print window loads, spelled the way each platform expects.
+///
+/// Tauri maps a custom scheme to `<scheme>://localhost/<path>` on macOS and
+/// Linux but to `http://<scheme>.localhost/<path>` on Windows. Getting this
+/// wrong fails only on the other platform, which is exactly the kind of bug
+/// that ships.
+fn print_window_url(report_id: &str) -> Result<url::Url, url::ParseError> {
+    if cfg!(windows) {
+        format!("http://{REPORT_SCHEME}.localhost/{report_id}").parse()
+    } else {
+        format!("{REPORT_SCHEME}://localhost/{report_id}").parse()
+    }
 }
 
 #[tauri::command]
@@ -490,6 +621,97 @@ mod tests {
     fn a_report_with_no_logo_anywhere_stays_unbranded() {
         assert!(choose_logo(None, None).is_none());
         assert!(choose_logo(Some("".into()), Some("  ".into())).is_none());
+    }
+
+    // ── Print protocol ──────────────────────────────────────────────────────
+
+    /// The URL differs by platform — Tauri maps a custom scheme to
+    /// `<scheme>://localhost/<path>` on macOS and Linux but to
+    /// `http://<scheme>.localhost/<path>` on Windows. Getting it wrong fails
+    /// only on the platform you are not testing on.
+    #[test]
+    fn the_print_url_uses_each_platform_s_custom_scheme_form() {
+        let url = print_window_url("abc-123").expect("the URL must parse");
+        assert!(url.as_str().contains("abc-123"), "{url}");
+        if cfg!(windows) {
+            assert_eq!(url.scheme(), "http");
+            assert_eq!(url.host_str(), Some("sentinel-report.localhost"));
+        } else {
+            assert_eq!(url.scheme(), REPORT_SCHEME);
+            assert_eq!(url.host_str(), Some("localhost"));
+        }
+        assert_eq!(url.path(), "/abc-123");
+    }
+
+    fn request(path: &str) -> tauri::http::Request<Vec<u8>> {
+        tauri::http::Request::builder()
+            .uri(format!("{REPORT_SCHEME}://localhost{path}"))
+            .body(Vec::new())
+            .expect("request")
+    }
+
+    fn state_with_report(id: &str, html: &str) -> AppState {
+        let state = AppState::new(crate::store::Store::in_memory().unwrap());
+        state.reports.blocking_write().insert(
+            id.to_string(),
+            ReportRecord {
+                id: id.to_string(),
+                scan_id: "s1".into(),
+                report_type: "client".into(),
+                company_name: "Acme".into(),
+                html_content: html.to_string(),
+                created_at: Utc::now(),
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn a_known_report_is_served_as_html() {
+        let state = state_with_report("r1", "<!DOCTYPE html><p>hello</p>");
+        let response = serve_report(&state, &request("/r1"));
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("Content-Type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(response.body(), b"<!DOCTYPE html><p>hello</p>");
+    }
+
+    /// A report is built from data observed on the assessed target. The
+    /// generator emits no script — there is a test for that — but this is the
+    /// boundary where the document stops being ours and starts being rendered,
+    /// so the guarantee is enforced here as a header rather than assumed.
+    #[test]
+    fn the_served_report_may_not_run_script_or_reach_the_network() {
+        let state = state_with_report("r1", "<p>x</p>");
+        let response = serve_report(&state, &request("/r1"));
+
+        let csp = response
+            .headers()
+            .get("Content-Security-Policy")
+            .expect("a report response must carry a CSP")
+            .to_str()
+            .unwrap();
+
+        assert!(csp.contains("script-src 'none'"), "{csp}");
+        assert!(csp.contains("object-src 'none'"), "{csp}");
+        assert!(csp.contains("default-src 'none'"), "{csp}");
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+        // The report's own inline styles and embedded logo still have to render.
+        assert!(csp.contains("style-src 'unsafe-inline'"), "{csp}");
+        assert!(csp.contains("img-src data:"), "{csp}");
+    }
+
+    #[test]
+    fn an_unknown_report_is_a_404_rather_than_a_blank_page() {
+        let state = state_with_report("r1", "<p>x</p>");
+        let response = serve_report(&state, &request("/does-not-exist"));
+
+        assert_eq!(response.status(), 404);
+        let body = String::from_utf8(response.body().clone()).unwrap();
+        assert!(body.contains("does-not-exist"), "the message must name what was asked for");
     }
 
     #[test]

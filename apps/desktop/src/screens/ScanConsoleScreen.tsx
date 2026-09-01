@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield } from 'lucide-react';
+import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal } from 'lucide-react';
 import type { Target, AuthorizationRecord, ScanLogPayload } from '../types';
 import { api, events } from '../lib/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -38,6 +38,55 @@ const STAGE_DEFS: StageStatus[] = [
 // How long to wait for the first engine event before warning. The pipeline
 // emits its first log line immediately on spawn, so silence past this point
 // means the events are not arriving rather than that a stage is slow.
+/// Starting points for the engine-config box.
+///
+/// Each is a complete, valid document rather than a fragment, so a preset can
+/// be used as-is without the analyst having to know which fields pair with
+/// which. Field names are camelCase because serde renames on the way in.
+const CONFIG_PRESETS: { label: string; json: string }[] = [
+  {
+    label: 'Gentle',
+    json: JSON.stringify(
+      {
+        rateLimitRps: 1,
+        timeoutSeconds: 3600,
+        nuclei: { severityFilter: 'critical,high' },
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    label: 'Thorough',
+    json: JSON.stringify(
+      {
+        rateLimitRps: 5,
+        timeoutSeconds: 3600,
+        zapSpider: {
+          runTraditionalSpider: true,
+          runAjaxSpider: true,
+          traditionalSpiderDurationSecs: 300,
+          ajaxSpiderDurationSecs: 300,
+        },
+        nuclei: { severityFilter: 'critical,high,medium,low' },
+      },
+      null,
+      2,
+    ),
+  },
+  {
+    label: 'Remote ZAP',
+    json: JSON.stringify({ zapApiUrl: 'http://127.0.0.1:8090', zapApiKey: '' }, null, 2),
+  },
+];
+
+const CONFIG_PLACEHOLDER = `{
+  "rateLimitRps": 3,
+  "timeoutSeconds": 1800,
+  "zapApiUrl": "http://localhost:8090",
+  "nuclei": { "severityFilter": "critical,high,medium" }
+}`;
+
 const WATCHDOG_SECONDS = 20;
 
 const STAGE_TAG: Record<StageStatus['stageType'], string> = {
@@ -60,6 +109,17 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
   const [scanRunId, setScanRunId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runDast, setRunDast] = useState(false);
+
+  // Per-scan engine configuration, sent to the pipeline as `configJson`.
+  //
+  // Left blank the backend applies DastConfig::default(), which is what every
+  // scan used to get with no way to influence it. Note that `rateLimitRps` is a
+  // ceiling request, not an override: the engine takes min(config, RoE), so
+  // this can lower the rate agreed in the Rules of Engagement but never raise
+  // it — the signed limit is a safety guarantee, not a default.
+  const [showConfig, setShowConfig] = useState(false);
+  const [configText, setConfigText] = useState('');
+  const [configError, setConfigError] = useState('');
   const [totalFindings, setTotalFindings] = useState(0);
   // Reported by the engine alongside the total. This was rendered as a literal
   // `0` regardless of what the scan found, so a run that turned up criticals
@@ -193,6 +253,24 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
       );
       return;
     }
+    // Parsed before the console is reset: a malformed config should leave the
+    // previous run's output on screen with an explanation, not wipe it and then
+    // report a failure against an empty console.
+    if (configText.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(configText);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          setConfigError('Scan configuration must be a JSON object, e.g. {"rateLimitRps": 2}.');
+          setShowConfig(true);
+          return;
+        }
+      } catch (err) {
+        setConfigError(`Scan configuration is not valid JSON: ${String(err)}`);
+        setShowConfig(true);
+        return;
+      }
+    }
+    setConfigError('');
     setError('');
     setLogs([]);
     setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType !== 'static' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
@@ -225,7 +303,7 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     }, WATCHDOG_SECONDS * 1000);
 
     try {
-      const id = await api.triggerScan(target.id, dast);
+      const id = await api.triggerScan(target.id, dast, configText.trim() || undefined);
       setScanRunId(id);
       localLog(`Scan accepted by the engine — run id ${id}`);
     } catch (err) {
@@ -245,6 +323,57 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
 
   return (
     <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20, height: '100%' }} className="fade-in">
+      {/* Engine configuration panel */}
+      {showConfig && (
+        <div style={{ padding: '14px 16px', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
+              Engine configuration (JSON) — optional
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {CONFIG_PRESETS.map(preset => (
+                <button
+                  key={preset.label}
+                  onClick={() => { setConfigText(preset.json); setConfigError(''); }}
+                  style={{ padding: '3px 9px', fontSize: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  {preset.label}
+                </button>
+              ))}
+              {configText && (
+                <button
+                  onClick={() => { setConfigText(''); setConfigError(''); }}
+                  style={{ padding: '3px 9px', fontSize: 10, background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          <textarea
+            value={configText}
+            onChange={(e) => { setConfigText(e.target.value); setConfigError(''); }}
+            spellCheck={false}
+            rows={7}
+            placeholder={CONFIG_PLACEHOLDER}
+            style={{ width: '100%', padding: '10px 12px', background: 'var(--bg-base)', border: `1px solid ${configError ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-code)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", outline: 'none', resize: 'vertical', lineHeight: 1.6 }}
+          />
+
+          {configError && (
+            <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{configError}</div>
+          )}
+
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
+            Left blank, the engine defaults apply: <code>5</code> requests/sec, a <code>1800</code>s job
+            budget, ZAP at <code>http://localhost:8090</code>, Nuclei filtered to
+            <code> critical,high,medium</code>.{' '}
+            <strong>rateLimitRps is a ceiling request, not an override</strong> — the engine takes the lower
+            of this and the rate in the signed Rules of Engagement
+            {authRecord ? <> (currently <code>{authRecord.scope.rateLimitRps}</code>/sec)</> : null}, so it
+            can slow a scan down but never speed it past what was agreed.
+          </div>
+        </div>
+      )}
+
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -264,6 +393,24 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
               Include DAST {!isAuthorized && '(sign RoE first)'}
             </span>
           </label>
+
+          <button
+            onClick={() => setShowConfig(v => !v)}
+            disabled={isRunning}
+            title="Per-scan engine configuration (JSON)"
+            style={{
+              padding: '6px 12px', fontSize: 12, cursor: isRunning ? 'not-allowed' : 'pointer',
+              background: showConfig ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)',
+              border: `1px solid ${showConfig ? 'rgba(34,211,238,0.3)' : 'var(--border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              color: showConfig ? 'var(--cyan)' : 'var(--text-secondary)',
+              display: 'flex', alignItems: 'center', gap: 6, opacity: isRunning ? 0.45 : 1,
+            }}>
+            <SlidersHorizontal size={13} /> Engine config
+            {configText.trim() && (
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--cyan)' }} />
+            )}
+          </button>
 
           {isRunning ? (
             <button onClick={cancelScan} style={cancelBtnStyle}>

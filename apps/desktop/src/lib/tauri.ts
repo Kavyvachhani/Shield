@@ -112,6 +112,12 @@ export const api = {
   listReports: (scanId: string): Promise<ReportRecord[]> =>
     invoke('list_reports', { scanId }),
 
+  // Opens the report in its own window and raises the system print dialog,
+  // which is where "Save as PDF" lives on every desktop platform. Done in Rust
+  // because JS `window.print()` is a silent no-op in the macOS webview.
+  printReport: (reportId: string): Promise<void> =>
+    invoke('print_report', { reportId }),
+
   defaultExportDir: (): Promise<string> =>
     invoke('default_export_dir'),
 

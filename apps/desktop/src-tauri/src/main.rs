@@ -25,6 +25,16 @@ fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
 
 fn main() {
     tauri::Builder::default()
+        // Serves a generated report to the print window over its own scheme.
+        // Registered on the builder because a uri-scheme protocol cannot be
+        // added after the app is running.
+        .register_uri_scheme_protocol(
+            commands::reports::REPORT_SCHEME,
+            |ctx, request| {
+                let state = ctx.app_handle().state::<AppState>();
+                commands::reports::serve_report(&state, &request)
+            },
+        )
         .setup(|app| {
             // Open the engagement database. If it cannot be opened (read-only
             // volume, permissions), fall back to an in-memory store so the app
@@ -75,6 +85,7 @@ fn main() {
             commands::reports::export_report,
             commands::reports::default_export_dir,
             commands::reports::list_reports,
+            commands::reports::print_report,
             // Checklist coverage
             commands::reports::get_coverage,
             commands::reports::get_checklist_catalog,

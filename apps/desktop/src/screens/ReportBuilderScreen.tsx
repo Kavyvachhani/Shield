@@ -10,65 +10,6 @@ import { api } from '../lib/tauri';
 const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
-/**
- * Send a report to the platform print pipeline, which is what turns it into a
- * PDF.
- *
- * The report stylesheet already carries a full `@media print` block — A4 page
- * size, margins, repeated table headers and per-block page-break rules — so the
- * printed result is the intended document rather than a screenshot of a web
- * page. All this has to do is hand that document to the printer.
- *
- * The frame is sandboxed. `allow-same-origin` is required for this window to
- * reach `contentWindow` at all, and `allow-modals` for the print dialog to
- * open; `allow-scripts` is deliberately withheld, so report content — which is
- * derived from the assessed target — still cannot execute inside the
- * application. That is the same guarantee the on-screen preview makes.
- *
- * Resolves once the frame has been torn down, so the caller can restore the
- * button. `afterprint` fires whether the user saved or cancelled; the timeout
- * is a backstop for platforms that do not emit it.
- */
-function printReport(html: string): Promise<void> {
-  return new Promise((resolve) => {
-    const frame = document.createElement('iframe');
-    frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
-    frame.setAttribute('aria-hidden', 'true');
-    // Kept on-page but out of sight: `display:none` stops some engines
-    // laying the document out, and an unlaid-out document prints blank.
-    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0';
-
-    let settled = false;
-    const cleanup = () => {
-      if (settled) return;
-      settled = true;
-      frame.remove();
-      resolve();
-    };
-
-    frame.onload = () => {
-      const view = frame.contentWindow;
-      if (!view) {
-        cleanup();
-        return;
-      }
-      view.addEventListener('afterprint', cleanup);
-      // A backstop only: if `afterprint` never arrives the frame would leak.
-      const backstop = window.setTimeout(cleanup, 120_000);
-      view.addEventListener('afterprint', () => window.clearTimeout(backstop));
-      try {
-        view.focus();
-        view.print();
-      } catch {
-        cleanup();
-      }
-    };
-
-    document.body.appendChild(frame);
-    frame.srcdoc = html;
-  });
-}
-
 /** Read a picked file as a `data:image/...;base64,` URI. */
 function readAsDataUri(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -264,17 +205,28 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
     }
   }
 
+  /**
+   * Open the report in its own window and raise the system print dialog.
+   *
+   * This used to print an offscreen iframe with `window.print()`. That call is
+   * a silent no-op in WKWebView — macOS has never implemented it — so the
+   * button did nothing at all on a Mac while working on Windows, where the
+   * webview is Chromium. The work now happens in Rust through the platform's
+   * own print operation, which every backend implements.
+   */
   async function saveAsPdf() {
     if (!report) return;
     setPrinting(true);
     setExportMsg('');
     setError('');
     try {
-      await printReport(report.content);
-      // This resolves once the dialog has closed, and the dialog does not say
-      // whether the user saved or cancelled or where the file went — so the
-      // message can only confirm the hand-off, never claim a file was written.
-      setExportMsg('Report sent to the print dialog. If you chose a PDF destination, it saved there.');
+      await api.printReport(report.reportId);
+      // The dialog reports neither its destination nor whether the user
+      // cancelled, so this can confirm the hand-off and nothing more.
+      setExportMsg(
+        'Report opened in its own window and sent to the print dialog. ' +
+        'Choose a PDF destination to save it; the window stays open so you can print again.',
+      );
     } catch (err) {
       setError(String(err));
     } finally {
@@ -515,9 +467,10 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                   Save as PDF
                 </button>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.6 }}>
-                  Opens your print dialog with the report already laid out for A4.
-                  Choose <strong>Save as PDF</strong> as the destination — on Windows
-                  that is <strong>Microsoft Print to PDF</strong>.
+                  Opens the report in its own window and raises your print dialog, with the
+                  document already laid out for A4. Choose a PDF destination to save it —
+                  on Windows that is <strong>Microsoft Print to PDF</strong>, on macOS the
+                  <strong> PDF</strong> menu at the bottom-left of the dialog.
                 </div>
               </>
             )}
