@@ -305,6 +305,60 @@ some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not re
     ctx.revision = "1.0".into();
     ctx.exceptions = vec![accepted, dismissed];
 
+    // A re-test rather than a first assessment, so the comparison section is
+    // exercised here too. Without this the samples show a document no repeat
+    // engagement produces, which is the wrong thing to check layout against.
+    ctx.comparison = Some(sentinel_core::reporting::delta::ScanDelta {
+        previous_reference: "SV-20260715-0930".into(),
+        previous_completed_at: Utc::now() - Duration::days(45),
+        newly_found: vec![finding(Sample {
+            title: "Reflected cross-site scripting in the error page",
+            severity: Severity::High,
+            cvss: 7.1,
+            cwe: "CWE-79",
+            owasp: "A03:2025-Injection",
+            wstg: "WSTG-INPV-01",
+            component: "https://dev.example.com/error?msg=",
+            kev: false,
+            epss: 0.44,
+        })],
+        resolved: vec![
+            finding(Sample {
+                title: "Session cookie missing the Secure and HttpOnly flags",
+                severity: Severity::High,
+                cvss: 7.5,
+                cwe: "CWE-614",
+                owasp: "A05:2025-Security Misconfiguration",
+                wstg: "WSTG-SESS-02",
+                component: "https://dev.example.com/login",
+                kev: false,
+                epss: 0.21,
+            }),
+            finding(Sample {
+                title: "Directory listing enabled on the uploads path",
+                severity: Severity::Low,
+                cvss: 3.7,
+                cwe: "CWE-548",
+                owasp: "A05:2025-Security Misconfiguration",
+                wstg: "WSTG-CONF-04",
+                component: "https://dev.example.com/uploads/",
+                kev: false,
+                epss: 0.01,
+            }),
+        ],
+        still_open: vec![finding(Sample {
+            title: "Content-Security-Policy header not set",
+            severity: Severity::Medium,
+            cvss: 5.3,
+            cwe: "CWE-693",
+            owasp: "A05:2025-Security Misconfiguration",
+            wstg: "WSTG-CONF-12",
+            component: "https://dev.example.com/",
+            kev: false,
+            epss: 0.07,
+        })],
+    });
+
     let client = ReportEngine::client_report(&ctx, &findings, Some(&coverage));
     let developer = ReportEngine::developer_report(&ctx, &findings, Some(&coverage));
 
@@ -313,6 +367,7 @@ some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not re
 
     println!("findings      : {}", findings.len());
     println!("exceptions    : {}", ctx.exceptions.len());
+    println!("comparison    : {}", ctx.comparison.is_some());
     println!("client   bytes: {}", client.len());
     println!("developer bytes: {}", developer.len());
     println!("logo in client   : {}", client.contains(LOGO));

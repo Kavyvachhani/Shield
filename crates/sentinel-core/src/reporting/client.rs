@@ -70,7 +70,7 @@ pub fn render(
         css = base_stylesheet(),
         extra_css = extra_stylesheet(),
         cover = cover(ctx),
-        contents = contents(coverage, &split),
+        contents = contents(coverage, &split, ctx.comparison.is_some()),
         summary = executive_summary(ctx, &counts, &posture, coverage, &split),
         posture_section = posture_panel(&posture, &counts),
         breakdown = severity_breakdown(&counts),
@@ -108,7 +108,11 @@ fn extra_stylesheet() -> &'static str {
 }
 
 /// Contents page, so a printed report can be navigated.
-fn contents(coverage: Option<&CoverageReport>, split: &ReportFindings) -> String {
+fn contents(
+    coverage: Option<&CoverageReport>,
+    split: &ReportFindings,
+    has_comparison: bool,
+) -> String {
     let mut entries: Vec<&str> = vec![
         "Executive Summary",
         "Findings by Severity",
@@ -120,6 +124,9 @@ fn contents(coverage: Option<&CoverageReport>, split: &ReportFindings) -> String
     entries.push("Principal Risks");
     if !split.accepted.is_empty() {
         entries.push("Accepted Risk Register");
+    }
+    if has_comparison {
+        entries.push("Remediation Progress");
     }
     if !split.active.is_empty() {
         entries.push("Remediation Roadmap");
@@ -1593,6 +1600,59 @@ mod tests {
 
         let without = render(&ctx(), &[], None);
         assert!(!without.contains(">Assessment Coverage"), "no coverage, no coverage entry");
+    }
+
+    /// The contents page is written by hand alongside the sections, so the two
+    /// drift the moment a section is added and the list is not. This compares
+    /// them rather than trusting that they match — which is how the
+    /// Remediation Progress section shipped missing from the index.
+    #[test]
+    fn every_rendered_section_appears_in_the_contents() {
+        let cov = ChecklistEngine::assess(&["Sentinel Native".into()], &[]);
+        let (accepted_finding, record) = accepted("Directory listing", Severity::Low, 3.0);
+        let mut c = comparison(
+            vec![finding("Closed", Severity::Low, 2.0)],
+            vec![finding("New", Severity::High, 7.5)],
+            vec![finding("Open", Severity::Medium, 5.0)],
+        );
+        c.exceptions = vec![record];
+
+        let out = render(
+            &c,
+            &[finding("Missing CSP", Severity::Medium, 5.3), accepted_finding],
+            Some(&cov),
+        );
+
+        // Section titles as rendered, minus the contents heading itself.
+        let headings: Vec<String> = out
+            .split("<h2")
+            .skip(1)
+            .filter_map(|chunk| chunk.split_once('>').map(|(_, rest)| rest))
+            .filter_map(|rest| rest.split_once("</h2>").map(|(title, _)| title.to_string()))
+            .filter(|t| t != "Contents")
+            .collect();
+
+        // The contents entries themselves, not "everything after the contents
+        // heading" — the first version of this test used the latter, so every
+        // section matched itself further down the document and the assertion
+        // could never fail.
+        let listed: Vec<String> = out
+            .split(r#"<div><span class="n">"#)
+            .skip(1)
+            .filter_map(|entry| entry.split_once("</span>"))
+            .filter_map(|(_, rest)| rest.split_once("</div>"))
+            .map(|(title, _)| title.to_string())
+            .collect();
+
+        assert!(!headings.is_empty(), "the report rendered no sections");
+        assert!(!listed.is_empty(), "the contents page listed nothing");
+        for heading in &headings {
+            assert!(
+                listed.contains(heading),
+                "section '{heading}' is rendered but missing from the contents page.\n\
+                 Contents lists: {listed:?}"
+            );
+        }
     }
 
     #[test]
