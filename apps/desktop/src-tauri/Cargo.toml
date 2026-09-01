@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-desktop"
-version = "0.7.0"
+version = "0.8.0"
 description = "SentinelVAPT Desktop Shell"
 authors = ["SentinelVAPT Team"]
 edition = "2021"
