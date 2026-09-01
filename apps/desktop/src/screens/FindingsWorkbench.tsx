@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Search, SlidersHorizontal, ChevronRight, X, AlertOctagon, Flag,
-  ShieldOff, Undo2, CalendarClock,
+  ShieldOff, Undo2, CalendarClock, FileUp,
 } from 'lucide-react';
 import type {
   Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord,
@@ -48,6 +48,13 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
   // will not be raised again, and withdrawing it is how you get it back.
   const [exceptions, setExceptions] = useState<ExceptionRecord[]>([]);
   const [showRegister, setShowRegister] = useState(false);
+
+  // SARIF import. Anything that emits SARIF — CodeQL, Snyk, Grype, GitHub code
+  // scanning — can be brought into this scan's results rather than living in a
+  // second report nobody reconciles against this one.
+  const importInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,6 +127,25 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
     } catch (err) { setTriageError(String(err)); }
   }
 
+  async function importSarif(file: File) {
+    setImporting(true);
+    setImportMsg('');
+    setTriageError('');
+    try {
+      const outcome = await api.importFindings({
+        scanId,
+        content: await file.text(),
+        sourceName: file.name,
+      });
+      setImportMsg(outcome.summary);
+      await load();
+    } catch (err) {
+      setTriageError(String(err));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   /** The standing decision covering a finding, if there is one. */
   function exceptionFor(f: Finding): ExceptionRecord | undefined {
     return exceptions.find(e => e.fingerprint === f.fingerprint && e.active);
@@ -143,6 +169,26 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             <SlidersHorizontal size={13} /> Filters
           </button>
 
+          <input
+            ref={importInput}
+            type="file"
+            accept=".sarif,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Reset first, so re-picking the same file fires onChange again.
+              e.target.value = '';
+              if (file) void importSarif(file);
+            }}
+          />
+          <button
+            onClick={() => importInput.current?.click()}
+            disabled={importing}
+            title="Import findings from another tool's SARIF output (CodeQL, Snyk, Grype, GitHub code scanning)"
+            style={{ padding: '7px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: importing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: importing ? 0.6 : 1 }}>
+            <FileUp size={13} /> {importing ? 'Importing…' : 'Import SARIF'}
+          </button>
+
           <button
             onClick={() => setShowRegister(v => !v)}
             title="Decisions that carry forward to every later scan of this target"
@@ -159,6 +205,12 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             {displayed.length} / {findings.length} findings
           </span>
         </div>
+
+        {importMsg && (
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'rgba(52,211,153,0.06)', fontSize: 11, color: 'var(--emerald)', lineHeight: 1.6 }}>
+            {importMsg}
+          </div>
+        )}
 
         {showRegister && (
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-base)' }}>

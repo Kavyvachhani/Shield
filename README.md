@@ -59,6 +59,13 @@ a single priority ranking, and reports written for the two audiences that actual
   Gitleaks, TruffleHog, retire.js, Checkov, OWASP ZAP, Nuclei, Nikto and testssl.sh.
   Missing engines are skipped with an explanation rather than failing the run, and the
   coverage matrix records which checks went unanswered as a result.
+- **Takes results from anything that speaks SARIF.** CodeQL, Snyk, Checkmarx, Grype, ESLint
+  and GitHub code scanning all emit it, so the tool is not limited to the engines it ships
+  adapters for. Imported findings go through the identical path as scanned ones — scored,
+  ranked, deduplicated against the scan's own results, and checked against the exception
+  register, so a weakness already dismissed does not reappear because it arrived by a
+  different route. The producing tool is credited by name and the finding says openly that
+  this engine did not verify it independently.
 - **Looks under the application as well as at it.** Checkov reads the Terraform,
   Kubernetes and container definitions the application is deployed from. A security group
   open to the internet is not something application hardening compensates for, and an

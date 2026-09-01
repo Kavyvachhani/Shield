@@ -251,6 +251,22 @@ export interface TriageOutcome {
   effect: string;
 }
 
+export interface ImportFindingsInput {
+  scanId: string;
+  /** File contents. SARIF 2.1.0 only. */
+  content: string;
+  /** Filename, for the audit trail and error messages. */
+  sourceName: string;
+}
+
+export interface ImportOutcome {
+  imported: number;
+  /** Dropped because this scan already held the same weakness. */
+  duplicatesSkipped: number;
+  engines: string[];
+  summary: string;
+}
+
 export type ExceptionKind = 'False Positive' | 'Accepted Risk';
 
 /**

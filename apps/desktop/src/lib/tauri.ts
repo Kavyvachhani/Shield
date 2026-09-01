@@ -13,7 +13,7 @@ import type {
   CreateProjectInput, CreateTargetInput, CreateRoEInput, SetProjectLogoInput,
   SetCredentialsInput, CredentialStatus,
   TriageInput, TriageOutcome, FindingFilter, GenerateReportInput,
-  ExceptionRecord, RecordExceptionInput,
+  ExceptionRecord, RecordExceptionInput, ImportFindingsInput, ImportOutcome,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
 } from '../types';
 
@@ -89,6 +89,12 @@ export const api = {
 
   triageFinding: (input: TriageInput): Promise<TriageOutcome> =>
     invoke('triage_finding', { input }),
+
+  // Import findings from another tool's SARIF output — CodeQL, Snyk, Grype,
+  // GitHub code scanning. They are scored, deduplicated and exception-checked
+  // on the same path as the engine's own results.
+  importFindings: (input: ImportFindingsInput): Promise<ImportOutcome> =>
+    invoke('import_findings', { input }),
 
   // Exception register. Decisions here outlive the scan that raised the
   // finding, so a dismissal or an acceptance is applied to every later scan

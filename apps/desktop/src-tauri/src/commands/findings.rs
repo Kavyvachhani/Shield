@@ -161,6 +161,176 @@ pub async fn get_finding_detail(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportFindingsInput {
+    /// The scan the imported findings join.
+    pub scan_id: String,
+    /// The file's contents. Only SARIF 2.1.0 is accepted today.
+    pub content: String,
+    /// Where it came from, for the audit trail.
+    pub source_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub imported: usize,
+    /// Findings dropped because this scan already held the same weakness.
+    pub duplicates_skipped: usize,
+    pub engines: Vec<String>,
+    pub summary: String,
+}
+
+/// Import findings from another tool's SARIF output.
+///
+/// SARIF is the interchange format the industry settled on — CodeQL, Snyk,
+/// Checkmarx, Grype, ESLint and GitHub code scanning all emit it — so this is
+/// what keeps the tool from being limited to the engines it ships adapters for.
+/// A client already running CodeQL in CI does not want a second report; they
+/// want those results ranked alongside everything else, deduplicated against
+/// it, and with the same exceptions applied.
+///
+/// Imported findings go through the identical path as scanned ones: scored,
+/// fingerprinted, and matched against the exception register, so a weakness
+/// already dismissed does not reappear merely because it arrived by a different
+/// route.
+#[tauri::command]
+pub async fn import_findings(
+    input: ImportFindingsInput,
+    state: State<'_, AppState>,
+) -> Result<ImportOutcome, String> {
+    let content = input.content.trim();
+    if content.is_empty() {
+        return Err("The file is empty — nothing to import.".into());
+    }
+
+    let run = state
+        .scan_runs
+        .read()
+        .await
+        .get(&input.scan_id)
+        .cloned()
+        .ok_or_else(|| format!("Scan '{}' not found.", input.scan_id))?;
+
+    let target_id = uuid::Uuid::parse_str(&run.target_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+    let scan_uuid = uuid::Uuid::parse_str(&input.scan_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+
+    let mut findings =
+        sentinel_core::parser::sarif::SarifParser::parse(content, target_id, scan_uuid).map_err(
+            |e| {
+                format!(
+                    "'{}' could not be read as SARIF 2.1.0: {e}. Check that the file is the tool's                      SARIF output rather than its native format.",
+                    input.source_name
+                )
+            },
+        )?;
+
+    if findings.is_empty() {
+        return Ok(ImportOutcome {
+            imported: 0,
+            duplicates_skipped: 0,
+            engines: Vec::new(),
+            summary: format!(
+                "'{}' parsed as valid SARIF but contained no results. That is a clean report from                  the producing tool, not an error.",
+                input.source_name
+            ),
+        });
+    }
+
+    // Score them, so an imported finding is ranked on the same scale as a
+    // scanned one rather than sorting to the bottom with a priority of zero.
+    for finding in &mut findings {
+        sentinel_core::scoring::priority::PriorityScoringEngine::score_and_explain(finding);
+    }
+
+    // Apply the analyst's standing decisions, exactly as a scan does. A
+    // weakness already dismissed must not reappear because it arrived from a
+    // different tool.
+    let register = {
+        let all = state.exceptions.read().await;
+        sentinel_core::exceptions::ExceptionRegister::for_target(all.values(), &run.target_id)
+    };
+    register.apply(&mut findings, Utc::now());
+
+    // Drop anything this scan already holds. Two tools reporting one weakness
+    // is a stronger claim, but it is still one weakness, and importing a
+    // duplicate would inflate every count in the report.
+    let existing: Vec<String> = {
+        let store = state.findings.read().await;
+        store
+            .values()
+            .filter(|s| s.scan_id == input.scan_id)
+            .map(|s| sentinel_core::exceptions::fingerprint(&s.finding))
+            .collect()
+    };
+
+    let before = findings.len();
+    findings.retain(|f| !existing.contains(&sentinel_core::exceptions::fingerprint(f)));
+    let duplicates_skipped = before - findings.len();
+
+    let mut engines: Vec<String> = findings
+        .iter()
+        .flat_map(|f| f.source_tools.iter().cloned())
+        .collect();
+    engines.sort();
+    engines.dedup();
+
+    if let Err(e) = state.store.save_findings(&input.scan_id, &findings) {
+        log_persist_error("imported findings", &e);
+    }
+    {
+        let mut store = state.findings.write().await;
+        for f in &findings {
+            let triage_note = register
+                .covering(f, Utc::now())
+                .map(|record| record.triage_note());
+            store.insert(
+                f.id.to_string(),
+                crate::state::StoredFinding {
+                    scan_id: input.scan_id.clone(),
+                    finding: f.clone(),
+                    triage_note,
+                },
+            );
+        }
+    }
+
+    // The producing engines join the scan's executed list, so the coverage
+    // matrix credits what they answered rather than reporting those checks as
+    // untested while their findings sit in the report.
+    if !engines.is_empty() {
+        let mut all = state.scan_engines.write().await;
+        let recorded = all.entry(input.scan_id.clone()).or_default();
+        for engine in &engines {
+            if !recorded.contains(engine) {
+                recorded.push(engine.clone());
+            }
+        }
+        if let Err(e) = state.store.save_scan_engines(&input.scan_id, recorded) {
+            log_persist_error("imported engine list", &e);
+        }
+    }
+
+    let imported = findings.len();
+    Ok(ImportOutcome {
+        imported,
+        duplicates_skipped,
+        engines: engines.clone(),
+        summary: format!(
+            "Imported {imported} finding(s) from {}{}. They are scored and ranked alongside the              scan's own results, and any standing exception has been applied.",
+            engines.join(", "),
+            if duplicates_skipped == 0 {
+                String::new()
+            } else {
+                format!(
+                    "; {duplicates_skipped} skipped as already reported by another engine in this scan"
+                )
+            }
+        ),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriageInput {
     pub finding_id: String,
     pub new_status: String,
