@@ -142,8 +142,11 @@ ZeroDivisionError: division by zero</pre>
                 "Content-Type: text/html".to_string(),
                 "Server: nginx/1.18.0".to_string(),
                 "X-Powered-By: PHP/7.4.3".to_string(),
+                // A policy that prevents nothing: reported separately from
+                // having no policy at all, because the fix is different.
+                "Content-Security-Policy-Report-Only: default-src 'self'".to_string(),
                 // Session cookie with none of the protective attributes.
-                "Set-Cookie: JSESSIONID=abc123def456".to_string(),
+                "Set-Cookie: JSESSIONID=abc123def456; Domain=.127.0.0.1".to_string(),
             ];
             // Reflect any origin with credentials — the exploitable CORS pattern.
             if let Some(o) = origin {
@@ -160,7 +163,8 @@ ZeroDivisionError: division by zero</pre>
 <!-- TODO: remove hardcoded password admin123 before launch -->
 <a href="https://external.example.test" target="_blank">External</a>
 <a href="/reports/quarterly">Quarterly report</a>
-<form action="/login"><input type="password" name="p" autocomplete="on"></form>
+<form action="/login" method="post"><input type="password" name="p" autocomplete="on"></form>
+<iframe src="https://widget.other.test/w"></iframe>
 <script src="/static/app.js"></script>
 <script>
 // AKIAIOSFODNN7EXAMPLE is AWS's own published documentation key. It is on
@@ -179,6 +183,13 @@ document.querySelector('#out').innerHTML = decodeURIComponent(location.hash.slic
 }
 
 fn good_response(path: &str) -> String {
+    if path == "/.well-known/security.txt" {
+        return http(
+            "200 OK",
+            &["Content-Type: text/plain".to_string()],
+            "Contact: mailto:security@example.test\nExpires: 2030-01-01T00:00:00.000Z\n",
+        );
+    }
     // Everything that is not the root is genuinely absent.
     if path != "/" {
         return http("404 Not Found", &["Content-Type: text/plain".to_string()], "not found");
@@ -296,6 +307,10 @@ async fn misconfigured_server_yields_the_expected_findings() {
         "Session or Credential Material Written to Browser Storage",
         "Cross-Window Message Sent to Any Origin",
         "URL-Derived Data Reaches a DOM Injection Sink",
+        "State-Changing Form Without an Anti-CSRF Token",
+        "Third-Party Frame Embedded Without a Sandbox",
+        "Session Cookie Scoped to the Parent Domain",
+        "No Vulnerability Disclosure Contact Published",
     ] {
         assert!(
             has(&findings, expected),
@@ -449,6 +464,10 @@ async fn hardened_server_yields_no_configuration_findings() {
         "Cross-Window Message Sent to Any Origin",
         "Plaintext WebSocket Referenced",
         "URL-Derived Data Reaches a DOM Injection Sink",
+        "State-Changing Form Without an Anti-CSRF Token",
+        "Third-Party Frame Embedded Without a Sandbox",
+        "Session Cookie Scoped to the Parent Domain",
+        "No Vulnerability Disclosure Contact Published",
     ] {
         assert!(
             !has(&findings, unexpected),

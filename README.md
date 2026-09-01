@@ -22,12 +22,17 @@ a single priority ranking, and reports written for the two audiences that actual
 
 ## What it does
 
-- **Scans without setup.** A built-in native check engine ships 61 checks covering
+- **Scans without setup.** A built-in native check engine ships 67 checks covering
   security headers, TLS configuration, cookie flags, cross-origin isolation, CORS policy,
   exposure surface, content analysis, client-side patterns and information disclosure —
   credentials and private keys left in JavaScript, readable source maps, tokens written to
-  browser storage, wildcard `postMessage`, plaintext WebSockets, and DOM-XSS sink patterns.
+  browser storage, wildcard `postMessage`, plaintext WebSockets, DOM-XSS sink patterns,
+  unprotected state-changing forms, unsandboxed third-party frames and unenforced CSP.
   No external tool is required on a fresh machine.
+- **Says how much it looked at.** Every report records the pages reached, the in-scope
+  URLs it did not get to and why, and the third-party origins the application depends on.
+  "No weaknesses found" across eleven pages and the same words across four hundred are
+  different claims, and the report now tells them apart.
 - **Assesses the whole application, not the front page.** The engine walks the target
   same-origin, breadth-first, and runs every passive check against each page it reaches —
   so a policy set on `/` but missing on `/admin`, or a key compiled into a lazily loaded

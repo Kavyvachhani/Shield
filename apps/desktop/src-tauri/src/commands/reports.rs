@@ -523,7 +523,7 @@ mod tests {
     use super::*;
 
     use crate::state::StoredFinding;
-    use sentinel_core::models::finding::Severity;
+    use sentinel_core::models::finding::{FindingKind, Severity};
     use uuid::Uuid;
 
     fn stored(scan_id: &str, title: &str, status: FindingStatus) -> StoredFinding {
@@ -537,6 +537,7 @@ mod tests {
                 title: title.into(),
                 description: "d".into(),
                 severity: Severity::High,
+                kind: FindingKind::default(),
                 cvss4: None,
                 epss: None,
                 kev_listed: false,

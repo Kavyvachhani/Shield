@@ -1,4 +1,4 @@
-use crate::models::finding::{Finding, Severity, FindingStatus, Evidence};
+use crate::models::finding::{Finding, Severity, FindingStatus, Evidence, FindingKind};
 use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
@@ -43,6 +43,7 @@ impl NucleiJsonlParser {
                     title: format!("Nuclei: {}", name),
                     description: description.to_string(),
                     severity,
+                    kind: FindingKind::default(),
                     cvss4: None,
                     epss: None,
                     kev_listed: false,

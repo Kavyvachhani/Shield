@@ -409,7 +409,7 @@ mod tests {
     use super::*;
     use crate::state::{ScanRunStatus, ScopeDefinitionRecord};
     use chrono::Utc;
-    use sentinel_core::models::finding::{FindingStatus, Severity};
+    use sentinel_core::models::finding::{FindingStatus, Severity, FindingKind};
     use uuid::Uuid;
 
     fn project() -> ProjectRecord {
@@ -463,6 +463,7 @@ mod tests {
             title: title.into(),
             description: "d".into(),
             severity: Severity::High,
+            kind: FindingKind::default(),
             cvss4: None,
             epss: None,
             kev_listed: false,

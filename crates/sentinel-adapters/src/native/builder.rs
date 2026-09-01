@@ -7,8 +7,7 @@
 //! report engine all receive consistent, taxonomy-complete data.
 
 use sentinel_core::models::finding::{
-    AITriage, CVSS4Data, Evidence, Finding, FindingStatus, Severity,
-};
+    AITriage, CVSS4Data, Evidence, Finding, FindingStatus, Severity, FindingKind};
 use sentinel_core::scoring::{Cvss4Severity, Cvss4Vector};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -95,6 +94,7 @@ impl NativeFinding {
             title: spec.title.to_string(),
             description,
             severity: spec.severity(),
+            kind: FindingKind::Weakness,
             cvss4: Some(CVSS4Data {
                 vector_string: spec.cvss_vector.to_string(),
                 base_score: spec.score(),
@@ -200,6 +200,12 @@ pub fn fp_confidence(spec_id: &str) -> f64 {
         "NATIVE-JWT-IN-CONTENT" => 0.20,
         // The key name is a heuristic: `refresh_banner` is not a credential.
         "NATIVE-INSECURE-BROWSER-STORAGE" => 0.20,
+        // The token is matched by field name, and a framework may inject one
+        // via script or rely on a header the markup does not show.
+        "NATIVE-FORM-NO-CSRF-TOKEN" => 0.30,
+        // Embedding a third party unsandboxed is often a deliberate decision
+        // for a payment or video widget that will not run inside one.
+        "NATIVE-IFRAME-NO-SANDBOX" => 0.20,
         // The origin may be fronted by an edge that adds the control after this
         // response left it, which a direct probe cannot see.
         "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => 0.08,
@@ -248,6 +254,21 @@ fn remediation_snippet(spec_id: &str) -> Option<&'static str> {
              X-Frame-Options: DENY"
         }
         "NATIVE-XCTO-MISSING" => "X-Content-Type-Options: nosniff",
+        "NATIVE-COOKIE-BROAD-DOMAIN" => {
+            "# Drop Domain so the cookie is host-only, and let __Host- enforce it.\n\
+             Set-Cookie: __Host-session=<value>; Secure; HttpOnly; SameSite=Lax; Path=/"
+        }
+        "NATIVE-CSP-REPORT-ONLY" => {
+            "# Same policy, enforcing. Keep report-only alongside to trial a stricter one.\n\
+             Content-Security-Policy: <your policy>\n\
+             Content-Security-Policy-Report-Only: <a stricter policy you are still testing>"
+        }
+        "NATIVE-IFRAME-NO-SANDBOX" => {
+            "<!-- Grant only what the embedded content needs. Never combine\n\
+             \x20    allow-scripts with allow-same-origin for a third party: together\n\
+             \x20    they let the frame remove its own sandbox. -->\n\
+             <iframe src=\"https://widget.example.com/\" sandbox=\"allow-scripts\"></iframe>"
+        }
         "NATIVE-REFERRER-POLICY" => "Referrer-Policy: strict-origin-when-cross-origin",
         "NATIVE-PERMISSIONS-POLICY" => {
             "# Deny by default; add back only what the application uses.\n\
@@ -357,6 +378,12 @@ the two before treating it as exploitable.",
 public, non-session token the disclosure is limited to whatever claims it carries.",
         "NATIVE-INSECURE-BROWSER-STORAGE" => "The storage key was matched by name. Confirm the value is \
 genuinely session or credential material rather than a preference that happens to be called 'token'.",
+        "NATIVE-FORM-NO-CSRF-TOKEN" => "No hidden field matching a known token name was found in the \
+markup. A framework that injects the token via script, or an endpoint that validates a custom header \
+instead, would be protected without this check being able to see it.",
+        "NATIVE-IFRAME-NO-SANDBOX" => "The frame is cross-origin and carries no sandbox attribute. \
+Some third-party widgets genuinely will not run inside one; confirm before treating this as an \
+oversight rather than a decision.",
         "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => "Observed on the response from this endpoint. If a \
 CDN or WAF rewrites headers at the edge, confirm the production response before acting.",
         _ => "Observed directly from the live HTTP/TLS response; not inferred.",

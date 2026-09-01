@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use crate::state::to_record;
     use chrono::Utc;
-    use sentinel_core::models::finding::{Finding, FindingStatus, Severity};
+    use sentinel_core::models::finding::{Finding, FindingStatus, Severity, FindingKind};
     use uuid::Uuid;
 
     fn record(title: &str, severity: Severity, score: f64, tool: &str) -> FindingRecord {
@@ -340,6 +340,7 @@ mod tests {
             title: title.into(),
             description: "A description mentioning cookies.".into(),
             severity,
+            kind: FindingKind::default(),
             cvss4: None,
             epss: None,
             kev_listed: false,

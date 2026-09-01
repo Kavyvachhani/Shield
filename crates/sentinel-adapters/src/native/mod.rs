@@ -32,6 +32,7 @@ pub mod disclosure;
 pub mod exposure;
 pub mod headers;
 pub mod probe;
+pub mod surface;
 pub mod tls;
 
 use crate::adapter_trait::ScannerAdapter;
@@ -182,7 +183,18 @@ impl ScannerAdapter for NativeCheckAdapter {
             exposure::run_source_maps(&probe, target_id, scan_id, &crawl.pages).await,
         );
 
-        // ── 7. Score every finding before handing them back ──────────────────
+        // ── 6c. Vulnerability disclosure contact ─────────────────────────────
+        findings.extend(
+            exposure::run_disclosure_contact(&probe, target_id, scan_id, &base_url).await,
+        );
+
+        // ── 7. Record what the assessment actually reached ───────────────────
+        // Not a weakness: "no weaknesses found" across eleven pages and the
+        // same words across four hundred are different claims, and a report
+        // that cannot tell them apart is asking for trust it has not earned.
+        findings.push(surface::record(target_id, scan_id, &base_url, &crawl));
+
+        // ── 8. Score every finding before handing them back ──────────────────
         for finding in &mut findings {
             sentinel_core::scoring::priority::PriorityScoringEngine::score_and_explain(finding);
         }

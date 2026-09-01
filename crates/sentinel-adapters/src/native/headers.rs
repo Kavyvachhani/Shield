@@ -367,6 +367,57 @@ client-side support.",
     ],
 };
 
+const CSP_REPORT_ONLY_ONLY: CheckSpec = CheckSpec {
+    id: "NATIVE-CSP-REPORT-ONLY",
+    title: "Content-Security-Policy Present but Not Enforced",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-693",
+    wstg: "WSTG-CONF-12",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "A Content-Security-Policy is set, but only through \
+`Content-Security-Policy-Report-Only`. That header does exactly what its name says: the browser \
+evaluates the policy, reports what would have been blocked, and then loads it anyway. Nothing is \
+prevented.\n\nThis is normally a deployment that stalled. Report-only is the correct way to roll a \
+policy out — you watch the reports, fix what breaks, then switch to enforcement — and the last step \
+is easy to forget once the reports go quiet. The result looks protected to anyone reading the \
+headers and protects nothing.",
+    remediation: "Once the report stream is clean, send the same policy under \
+`Content-Security-Policy`. Keeping both is a reasonable end state: enforce the policy you are \
+confident in, and continue to trial a stricter one under report-only. If the reports are not clean \
+yet, the finding stands — the application is currently unprotected regardless of the reason.",
+    references: &[
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only",
+    ],
+};
+
+const COOKIE_BROAD_DOMAIN: CheckSpec = CheckSpec {
+    id: "NATIVE-COOKIE-BROAD-DOMAIN",
+    title: "Session Cookie Scoped to the Parent Domain",
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1275",
+    wstg: "WSTG-SESS-02",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "A session cookie is issued with an explicit `Domain` attribute naming a parent \
+domain, so the browser sends it to every subdomain of that parent — not just the application that \
+issued it.\n\nThat turns every other subdomain into part of this application's attack surface. A \
+marketing site on a shared platform, a staging host, a status page run by a third party, or a \
+dangling DNS record an attacker can claim: any of them receives the live session cookie of every \
+user who visits it, and a cross-site scripting flaw on any of them reads it.\n\nSubdomains are \
+also not an origin boundary for cookies in the other direction — a compromised sibling can set \
+cookies the parent will accept, which is how session fixation works across a domain family.",
+    remediation: "Drop the `Domain` attribute so the cookie is host-only, which is the default and \
+the correct behaviour for a session. Combine it with the `__Host-` name prefix, which the browser \
+enforces: a `__Host-` cookie is rejected outright unless it is Secure, `Path=/` and has no Domain \
+attribute at all, so the mistake cannot be reintroduced later. Where subdomains genuinely need a \
+shared session, issue a separate token scoped to that purpose rather than widening the primary one.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html",
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies#define_where_cookies_are_sent",
+    ],
+};
+
 /// Run every passive header/cookie check against one response.
 /// Every check this module can raise.
 ///
@@ -393,6 +444,8 @@ pub const SPECS: &[CheckSpec] = &[
     CORP_MISSING,
     XSS_FILTER_ENABLED,
     COOKIE_NO_PREFIX,
+    CSP_REPORT_ONLY_ONLY,
+    COOKIE_BROAD_DOMAIN,
 ];
 
 pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding> {
@@ -427,9 +480,29 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
     }
 
     // ── CSP ──────────────────────────────────────────────────────────────────
-    let csp = resp
-        .header("content-security-policy")
-        .or_else(|| resp.header("content-security-policy-report-only"));
+    let enforced_csp = resp.header("content-security-policy");
+    let report_only_csp = resp.header("content-security-policy-report-only");
+
+    // A policy that is only in report-only mode prevents nothing, however good
+    // it is. Reported separately from "no policy at all", because the fix is
+    // different: one is writing a policy, the other is finishing a rollout.
+    if enforced_csp.is_none() {
+        if let Some(policy) = &report_only_csp {
+            findings.push(make(
+                &CSP_REPORT_ONLY_ONLY,
+                "A policy is served under Content-Security-Policy-Report-Only, with no enforcing \
+                 Content-Security-Policy header alongside it."
+                    .into(),
+                vec![format!("curl -sSI {url} | grep -i content-security-policy")],
+                vec![ev(&format!(
+                    "Content-Security-Policy-Report-Only: {}",
+                    truncate(policy, 1000)
+                ))],
+            ));
+        }
+    }
+
+    let csp = enforced_csp.clone().or_else(|| report_only_csp.clone());
     match &csp {
         None => findings.push(make(
             &CSP_MISSING,
@@ -613,6 +686,19 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
                 ));
             }
         }
+        if let Some(domain) = cookie.domain() {
+            findings.push(make(
+                &COOKIE_BROAD_DOMAIN,
+                format!(
+                    "Cookie '{}' is issued with Domain={}, so the browser sends it to every \
+                     subdomain of that parent rather than only to this host.",
+                    cookie.name, domain
+                ),
+                vec![format!("curl -sSI {url} | grep -i set-cookie")],
+                vec![NativeFinding::evidence("http_response", "Set-Cookie (value redacted)", &redacted)],
+            ));
+        }
+
         // The prefixes are only meaningful over HTTPS — the browser rejects a
         // prefixed cookie set over plaintext, so demanding one there would be
         // advice that cannot be followed.
@@ -926,6 +1012,23 @@ impl ParsedCookie {
         None
     }
 
+    /// The explicit `Domain` attribute, when the cookie widens its own scope.
+    ///
+    /// A cookie with no Domain is host-only, which is the correct default and
+    /// is not reported. A leading dot is historical syntax meaning the same
+    /// thing as without one, so it is stripped before comparison.
+    pub fn domain(&self) -> Option<String> {
+        self.attributes.iter().find_map(|attr| {
+            let lower = attr.to_lowercase();
+            let value = lower.strip_prefix("domain=")?.trim().trim_start_matches('.');
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        })
+    }
+
     /// Whether the cookie name carries a browser-enforced security prefix.
     pub fn has_security_prefix(&self) -> bool {
         let n = self.name.to_lowercase();
@@ -1058,6 +1161,21 @@ mod tests {
         let issues = analyze_csp("default-src 'self'");
         assert!(issues.iter().any(|i| i.contains("object-src")));
         assert!(issues.iter().any(|i| i.contains("base-uri")));
+    }
+
+    /// A cookie with no Domain is host-only, which is the correct default.
+    #[test]
+    fn only_an_explicit_domain_attribute_widens_a_cookie() {
+        assert_eq!(
+            ParsedCookie::parse("sid=x; Domain=example.com; Path=/").domain(),
+            Some("example.com".to_string())
+        );
+        // A leading dot is historical syntax for the same thing.
+        assert_eq!(
+            ParsedCookie::parse("sid=x; Domain=.example.com").domain(),
+            Some("example.com".to_string())
+        );
+        assert!(ParsedCookie::parse("sid=x; Path=/; Secure").domain().is_none());
     }
 
     #[test]

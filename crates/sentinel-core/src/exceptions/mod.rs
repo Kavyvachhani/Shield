@@ -368,7 +368,7 @@ pub fn from_triage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::finding::{CVSS4Data, Finding};
+    use crate::models::finding::{CVSS4Data, Finding, FindingKind};
     use chrono::Duration;
     use uuid::Uuid;
 
@@ -380,6 +380,7 @@ mod tests {
             title: title.into(),
             description: "Observed on this run.".into(),
             severity: Severity::Medium,
+            kind: FindingKind::default(),
             cvss4: Some(CVSS4Data {
                 vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N".into(),
                 base_score: 5.3,

@@ -1,4 +1,4 @@
-use crate::models::finding::{Finding, Severity, FindingStatus, Evidence};
+use crate::models::finding::{Finding, Severity, FindingStatus, Evidence, FindingKind};
 use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
@@ -51,6 +51,7 @@ impl SarifParser {
                             title: message.to_string(),
                             description: format!("SARIF rule {} reported violation.", rule_id),
                             severity,
+                            kind: FindingKind::default(),
                             cvss4: None,
                             epss: None,
                             kev_listed: false,

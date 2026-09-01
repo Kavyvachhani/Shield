@@ -8,8 +8,7 @@ use chrono::{Duration, Utc};
 use sentinel_core::checklist::ChecklistEngine;
 use sentinel_core::exceptions::{self, ExceptionKind};
 use sentinel_core::models::finding::{
-    AITriage, CVSS4Data, EPSSData, Evidence, Finding, FindingStatus, Severity,
-};
+    AITriage, CVSS4Data, EPSSData, Evidence, Finding, FindingStatus, Severity, FindingKind};
 use sentinel_core::reporting::{ReportContext, ReportEngine};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -54,6 +53,7 @@ fn finding(sample: Sample<'_>) -> Finding {
              rendered PDF rather than guessed at."
         ),
         severity,
+        kind: FindingKind::default(),
         cvss4: Some(CVSS4Data {
             vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N".into(),
             base_score: cvss,

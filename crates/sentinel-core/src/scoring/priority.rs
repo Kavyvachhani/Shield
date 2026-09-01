@@ -119,8 +119,7 @@ impl PriorityScoringEngine {
 mod tests {
     use super::*;
     use crate::models::finding::{
-        Finding, Severity, CVSS4Data, EPSSData, FindingStatus,
-    };
+        Finding, Severity, CVSS4Data, EPSSData, FindingStatus, FindingKind};
     use uuid::Uuid;
     use chrono::Utc;
 
@@ -132,6 +131,7 @@ mod tests {
             title: "Test Finding".into(),
             description: "Test".into(),
             severity: Severity::High,
+            kind: FindingKind::default(),
             cvss4: Some(CVSS4Data {
                 vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H".into(),
                 base_score: cvss,

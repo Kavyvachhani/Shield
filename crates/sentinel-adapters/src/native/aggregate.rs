@@ -62,7 +62,9 @@ pub fn aggregation_of(spec_id: &str) -> Aggregation {
         | "NATIVE-CACHE-CONTROL"
         | "NATIVE-COOP-MISSING"
         | "NATIVE-CORP-MISSING"
-        | "NATIVE-XSS-FILTER-ENABLED" => Aggregation::Origin,
+        | "NATIVE-XSS-FILTER-ENABLED"
+        | "NATIVE-CSP-REPORT-ONLY"
+        | "NATIVE-COOKIE-BROAD-DOMAIN" => Aggregation::Origin,
         _ => Aggregation::PerUrl,
     }
 }
@@ -183,7 +185,7 @@ fn cap_instances(mut group: Vec<Finding>) -> Vec<Finding> {
 mod tests {
     use super::*;
     use crate::native::all_specs;
-    use sentinel_core::models::finding::{FindingStatus, Severity};
+    use sentinel_core::models::finding::{FindingStatus, Severity, FindingKind};
     use uuid::Uuid;
 
     fn finding(title: &str, component: &str) -> Finding {
@@ -194,6 +196,7 @@ mod tests {
             title: title.into(),
             description: "Base description.".into(),
             severity: Severity::Medium,
+            kind: FindingKind::Weakness,
             cvss4: None,
             epss: None,
             kev_listed: false,

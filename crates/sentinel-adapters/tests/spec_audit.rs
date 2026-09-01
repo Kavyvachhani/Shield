@@ -134,7 +134,7 @@ fn the_engine_ships_the_checks_it_claims() {
     // which would silently drop its checks from every scan.
     assert_eq!(
         all_specs().len(),
-        61,
+        67,
         "native check count changed — update this figure and the README/INSTALL \
          coverage claims together, so the documentation cannot drift from the engine"
     );

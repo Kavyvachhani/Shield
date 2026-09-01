@@ -81,7 +81,7 @@ pub fn render(
         owasp = owasp_rollup(&split),
         compliance = compliance(&counts, coverage),
         methodology = methodology(ctx),
-        assurance = assurance(ctx, coverage, findings),
+        assurance = assurance(ctx, coverage, findings, &split),
         scope = scope_and_attestation(ctx),
         signoff = signoff(ctx),
         footer = footer_html(ctx, "Security Assessment Report"),
@@ -968,6 +968,7 @@ fn assurance(
     ctx: &ReportContext,
     coverage: Option<&CoverageReport>,
     findings: &[Finding],
+    split: &ReportFindings,
 ) -> String {
     let evidence_count: usize = findings.iter().map(|f| f.evidences.len()).sum();
     let engines = if ctx.engines_executed.is_empty() {
@@ -1029,6 +1030,7 @@ what evidence exists behind each statement in this report, and what the work doe
   </tbody>
 </table>
 
+{surface}
 <h3>Evidence and reproducibility</h3>
 <table>
   <tbody>
@@ -1054,11 +1056,53 @@ what evidence exists behind each statement in this report, and what the work doe
   <li>This report is not a certification and does not, on its own, discharge a regulatory obligation.</li>
 </ul>
 </div>"##,
+        surface = surface_block(split),
         evidence_count = evidence_count,
         engines = engines,
         unavailable_row = unavailable_row,
         coverage_row = coverage_row,
         dismissed_row = dismissed_row,
+    )
+}
+
+/// How much of the application the assessment actually reached.
+///
+/// A clean result is only meaningful next to this. "No weaknesses found" across
+/// eleven pages and the same words across four hundred are different claims,
+/// and a report that presents them identically is asking for trust it has not
+/// earned.
+fn surface_block(split: &ReportFindings) -> String {
+    let notes = split.surface_notes();
+    if notes.is_empty() {
+        return String::new();
+    }
+
+    let body: String = notes
+        .iter()
+        .map(|(description, evidences)| {
+            let lists: String = evidences
+                .iter()
+                .map(|(title, content)| {
+                    format!(
+                        r##"<details style="margin-top:8px">
+  <summary class="small" style="cursor:pointer;color:var(--brand)">{title}</summary>
+  <pre class="small" style="margin-top:6px">{content}</pre>
+</details>"##,
+                        title = html(title),
+                        content = html(content),
+                    )
+                })
+                .collect();
+            format!("<p>{}</p>{lists}", html_multiline(description))
+        })
+        .collect();
+
+    format!(
+        r##"<h3>How much of the application was reached</h3>
+{body}
+<p class="small muted">Pages behind a login are reachable only when scan credentials were supplied;
+routes with no link pointing at them cannot be discovered by crawling at all, and would need to be
+supplied explicitly or found by an analyst.</p>"##
     )
 }
 

@@ -232,6 +232,7 @@ pub const SPECS: &[CheckSpec] = &[
     DIRECTORY_LISTING,
     API_DOCS_EXPOSED,
     GRAPHQL_INTROSPECTION,
+    SECURITY_TXT_MISSING,
 ];
 
 fn candidates() -> Vec<Candidate> {
@@ -280,6 +281,64 @@ fn candidates() -> Vec<Candidate> {
 
         Candidate { path: "/graphql", label: "GraphQL endpoint", signatures: &["graphql", "\"errors\"", "must provide query"], spec: &GRAPHQL_INTROSPECTION },
     ]
+}
+
+const SECURITY_TXT_MISSING: CheckSpec = CheckSpec {
+    id: "NATIVE-SECURITY-TXT-MISSING",
+    title: "No Vulnerability Disclosure Contact Published",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1059",
+    wstg: "WSTG-INFO-01",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "No `security.txt` is published at `/.well-known/security.txt`. RFC 9116 defines \
+it as the standard place a researcher looks for where to report a vulnerability.\n\nThis is not a \
+weakness in the application — it is a gap in how a weakness would reach you. Someone who finds a \
+flaw and cannot see where to send it has three options: give up, post it publicly, or contact \
+whoever they can find, which is usually a sales address that will not recognise what they have \
+been sent. All three are worse for you than a mailbox that is being watched.",
+    remediation: "Publish `/.well-known/security.txt` with at minimum a `Contact:` line and an \
+`Expires:` date, as RFC 9116 requires. `Policy:` and `Preferred-Languages:` are worth adding. Point \
+`Contact:` at a monitored mailbox rather than an individual, and put the same file at \
+`/security.txt` for clients that look there. Generate it at https://securitytxt.org/ if you want the \
+format checked.",
+    references: &[
+        "https://www.rfc-editor.org/rfc/rfc9116",
+        "https://securitytxt.org/",
+    ],
+};
+
+/// Whether the target publishes a vulnerability disclosure contact.
+///
+/// A separate probe from the metafile list above because it is the *absence*
+/// that is reported, and the candidate machinery is built around confirming a
+/// file is present rather than confirming it is not.
+pub async fn run_disclosure_contact(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    base_url: &str,
+) -> Vec<Finding> {
+    let origin = base_url.trim_end_matches('/');
+
+    for path in ["/.well-known/security.txt", "/security.txt"] {
+        let Ok(Some(resp)) = probe.get(&format!("{origin}{path}")).await else { continue };
+        // A single-page application answers every unknown path with its index
+        // document, so a 200 is not enough — the file has to look like one.
+        if is_readable(resp.status) && resp.body.to_lowercase().contains("contact:") {
+            return Vec::new();
+        }
+    }
+
+    vec![NativeFinding::build(
+        &SECURITY_TXT_MISSING,
+        target_id,
+        scan_id,
+        origin,
+        "Neither /.well-known/security.txt nor /security.txt returned a file containing a Contact: field.",
+        vec![format!("curl -sS {origin}/.well-known/security.txt")],
+        vec![],
+    )]
 }
 
 /// Probe for readable source maps behind the scripts a page loads.

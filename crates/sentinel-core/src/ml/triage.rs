@@ -46,7 +46,7 @@ impl LocalMLTriageEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::finding::{Finding, Severity, FindingStatus};
+    use crate::models::finding::{Finding, Severity, FindingStatus, FindingKind};
     use uuid::Uuid;
     use chrono::Utc;
 
@@ -59,6 +59,7 @@ mod tests {
             title: "Mock SQL Injection in Test File".into(),
             description: "Desc".into(),
             severity: Severity::Medium,
+            kind: FindingKind::default(),
             cvss4: None,
             epss: None,
             kev_listed: false,

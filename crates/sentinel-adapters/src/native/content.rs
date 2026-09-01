@@ -9,6 +9,7 @@ use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
+const OWASP_ACCESS: &str = "A01:2025-Broken Access Control";
 const OWASP_CRYPTO: &str = "A04:2025-Cryptographic Failures";
 const OWASP_INTEGRITY: &str = "A08:2025-Software or Data Integrity Failures";
 const OWASP_EXCEPTIONS: &str = "A10:2025-Mishandling of Exceptional Conditions";
@@ -177,6 +178,82 @@ manager behave correctly. Reserve `autocomplete=\"off\"` for forms genuinely int
     ],
 };
 
+const FORM_NO_CSRF_TOKEN: CheckSpec = CheckSpec {
+    id: "NATIVE-FORM-NO-CSRF-TOKEN",
+    title: "State-Changing Form Without an Anti-CSRF Token",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-352",
+    wstg: "WSTG-SESS-05",
+    owasp_2025: OWASP_ACCESS,
+    api_top10: None,
+    description: "A form submits with `method=\"post\"` and carries no hidden field that looks like \
+an anti-CSRF token. Without one, any site the user visits while logged in can submit the same form \
+to this application on their behalf: the browser attaches the session cookie automatically, and the \
+application cannot distinguish the forged request from a real one.\n\nModern browsers default \
+cookies to `SameSite=Lax`, which blocks the classic cross-site POST and is why this is reported as \
+a moderate rather than a severe issue. That default is a mitigation, not a control — it does not \
+apply to a cookie explicitly set to `SameSite=None`, it does not cover same-site subdomain attacks, \
+and it is not something the application gets to rely on for a client using an older browser.",
+    remediation: "Issue a per-session token, render it into every state-changing form as a hidden \
+field, and reject any POST whose token does not match the session. Most frameworks ship this: \
+Django's `{% csrf_token %}`, Rails' `protect_from_forgery`, Spring Security's CSRF filter, \
+`csurf` for Express. Set session cookies to `SameSite=Lax` or `Strict` as defence in depth, and \
+for APIs consumed by script prefer a custom header the browser will not attach cross-origin.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html",
+    ],
+};
+
+const IFRAME_NO_SANDBOX: CheckSpec = CheckSpec {
+    id: "NATIVE-IFRAME-NO-SANDBOX",
+    title: "Third-Party Frame Embedded Without a Sandbox",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-1021",
+    wstg: "WSTG-CLNT-13",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "An `<iframe>` loads content from another origin with no `sandbox` attribute. The \
+framed document then runs with its full set of capabilities: it can run script, submit forms, open \
+popups, trigger downloads, and navigate the top-level window away from your application — the last \
+of which is a ready-made phishing primitive, because the address bar changes to somewhere the user \
+did not choose to go while they believe they are still on your site.\n\nWhatever the third party \
+serves, you are serving. If their content is compromised, it is compromised inside your page.",
+    remediation: "Add a `sandbox` attribute listing only what the embedded content genuinely \
+requires — `sandbox=\"allow-scripts\"` for an ordinary widget, adding `allow-same-origin` only if \
+it must reach its own storage, and `allow-forms` only if it posts. Never combine `allow-scripts` \
+with `allow-same-origin` for content you do not control: together they let the frame remove its own \
+sandbox. Add `allow-top-navigation` only where it is deliberate, and pair the frame with a \
+`Content-Security-Policy` `frame-src` directive naming the origins you permit.",
+    references: &[
+        "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox",
+    ],
+};
+
+const LINK_DOWNGRADES_TRANSPORT: CheckSpec = CheckSpec {
+    id: "NATIVE-LINK-DOWNGRADE",
+    title: "Encrypted Page Links to Its Own Site over Plaintext HTTP",
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:P/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-319",
+    wstg: "WSTG-CONF-07",
+    owasp_2025: OWASP_CRYPTO,
+    api_top10: None,
+    description: "A page served over HTTPS contains navigation links to `http://` URLs on its own \
+site. Following one takes the user onto an unencrypted connection, and the request that does so \
+carries their session cookie in clear text unless every cookie is marked Secure. An attacker on the \
+network sees the request, and is positioned to answer it themselves before the server does.\n\nAn \
+HSTS policy upgrades these links before they leave the browser, which is why the impact is limited \
+where one is set — but only for a browser that has already seen the HSTS header for this host. The \
+first visit, and any client that has never reached the site over HTTPS, is unprotected.",
+    remediation: "Use protocol-relative or absolute HTTPS links, or better, root-relative paths so \
+the scheme is inherited from the page. Add `Strict-Transport-Security` with `includeSubDomains` and \
+submit the domain to the browser preload list, so a client is upgraded even on a first visit. \
+`Content-Security-Policy: upgrade-insecure-requests` rewrites the remainder at load time as a \
+backstop while the markup is corrected.",
+    references: &[
+        "https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/07-Test_HTTP_Strict_Transport_Security",
+    ],
+};
+
 /// Run every passive content check against one HTML response.
 /// Every check this module can raise.
 ///
@@ -193,6 +270,9 @@ pub const SPECS: &[CheckSpec] = &[
     COMMENT_LEAK,
     SESSION_IN_URL,
     AUTOCOMPLETE_ON,
+    FORM_NO_CSRF_TOKEN,
+    IFRAME_NO_SANDBOX,
+    LINK_DOWNGRADES_TRANSPORT,
 ];
 
 pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding> {
@@ -302,6 +382,52 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
             vec!["Inspect the address bar after authenticating".into()],
             format!("URL: {}", truncate(&resp.final_url, 200)),
         ));
+    }
+
+    // ── Cross-site request forgery ───────────────────────────────────────────
+    let unprotected = find_posting_forms_without_tokens(body);
+    if !unprotected.is_empty() {
+        findings.push(make(
+            &FORM_NO_CSRF_TOKEN,
+            format!(
+                "{} form(s) post without a hidden field that looks like an anti-CSRF token.",
+                unprotected.len()
+            ),
+            vec![format!("curl -sS {url} | grep -iE '<form[^>]+post'")],
+            unprotected.join("\n"),
+        ));
+    }
+
+    // ── Framed third-party content ───────────────────────────────────────────
+    let unsandboxed = find_unsandboxed_frames(body, resp.final_url.as_str());
+    if !unsandboxed.is_empty() {
+        findings.push(make(
+            &IFRAME_NO_SANDBOX,
+            format!(
+                "{} cross-origin iframe(s) are embedded with no sandbox attribute: {}.",
+                unsandboxed.len(),
+                truncate(&unsandboxed.join(", "), 250)
+            ),
+            vec![format!("curl -sS {url} | grep -oE '<iframe[^>]+>'")],
+            unsandboxed.join("\n"),
+        ));
+    }
+
+    // ── Transport downgrade in navigation ────────────────────────────────────
+    if resp.is_https() {
+        let downgrades = find_plaintext_self_links(body, resp.final_url.as_str());
+        if !downgrades.is_empty() {
+            findings.push(make(
+                &LINK_DOWNGRADES_TRANSPORT,
+                format!(
+                    "{} link(s) point at http:// URLs on this site: {}.",
+                    downgrades.len(),
+                    truncate(&downgrades.join(", "), 250)
+                ),
+                vec![format!("curl -sS {url} | grep -oE 'href=\"http://[^\"]+\"'")],
+                downgrades.join("\n"),
+            ));
+        }
     }
 
     // ── Password autocomplete ────────────────────────────────────────────────
@@ -547,6 +673,124 @@ pub fn detect_session_in_url(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Forms that POST without anything resembling an anti-CSRF token.
+///
+/// The token is matched by *name*, because its value is opaque and its field
+/// name is the only thing conventions agree on. GET forms are excluded: they
+/// should not change state, and reporting a search box would be noise.
+pub fn find_posting_forms_without_tokens(body: &str) -> Vec<String> {
+    const TOKEN_NAMES: &[&str] = &[
+        "csrf", "xsrf", "authenticity_token", "__requestverificationtoken",
+        "_token", "nonce", "anti-forgery", "antiforgery", "requestverificationtoken",
+    ];
+
+    let mut found = Vec::new();
+    // Split on the opening tag and take everything up to the matching close, so
+    // each chunk holds one form's inputs.
+    for chunk in body.split("<form").skip(1) {
+        let form = match chunk.find("</form") {
+            Some(end) => &chunk[..end],
+            // An unclosed form: look at a bounded window rather than the rest
+            // of the document, which would drag in the next form's token.
+            None => &chunk[..chunk.len().min(4000)],
+        };
+        let lower = form.to_lowercase();
+
+        // Only state-changing submissions. A form with no method attribute
+        // defaults to GET.
+        if !lower.contains("method=\"post\"") && !lower.contains("method='post'") {
+            continue;
+        }
+        if TOKEN_NAMES.iter().any(|name| lower.contains(name)) {
+            continue;
+        }
+
+        let opening = form.find('>').map(|end| &form[..=end]).unwrap_or(form);
+        found.push(truncate(&format!("<form{}", opening.trim()), 180));
+        if found.len() >= 15 {
+            break;
+        }
+    }
+    found
+}
+
+/// Cross-origin iframes carrying no `sandbox` attribute.
+///
+/// Same-origin frames are excluded: a sandbox there would restrict the
+/// application's own content, and the risk this check describes — a third party
+/// running with full capability inside your page — does not apply.
+pub fn find_unsandboxed_frames(body: &str, page_url: &str) -> Vec<String> {
+    let page_host = url::Url::parse(page_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+
+    let mut found = Vec::new();
+    for tag in extract_tags(body, &["iframe"]) {
+        let lower = tag.to_lowercase();
+        if lower.contains("sandbox") {
+            continue;
+        }
+        let Some(src) = extract_attribute(&tag, "src") else { continue };
+        if !src.starts_with("http://") && !src.starts_with("https://") && !src.starts_with("//") {
+            continue;
+        }
+        let src_host = url::Url::parse(&src)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .or_else(|| {
+                src.strip_prefix("//")
+                    .and_then(|rest| rest.split('/').next().map(str::to_string))
+            });
+        if src_host.is_some() && src_host == page_host {
+            continue;
+        }
+        found.push(truncate(&src, 160));
+        if found.len() >= 15 {
+            break;
+        }
+    }
+    found
+}
+
+/// `http://` links back to the page's own host.
+///
+/// Only same-host links are reported. A link to another site over plaintext is
+/// that site's configuration to answer for, not this application's, and
+/// reporting it would fill the finding with third-party URLs nobody here can
+/// fix.
+pub fn find_plaintext_self_links(body: &str, page_url: &str) -> Vec<String> {
+    let Some(page_host) = url::Url::parse(page_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+    else {
+        return Vec::new();
+    };
+
+    let mut found = Vec::new();
+    for tag in extract_tags(body, &["a", "link", "form"]) {
+        for attr in ["href", "action"] {
+            let Some(value) = extract_attribute(&tag, attr) else { continue };
+            if !value.starts_with("http://") {
+                continue;
+            }
+            let host = url::Url::parse(&value)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()));
+            if host.as_deref() != Some(page_host.as_str()) {
+                continue;
+            }
+            let entry = truncate(&value, 160);
+            if !found.contains(&entry) {
+                found.push(entry);
+            }
+        }
+        if found.len() >= 15 {
+            break;
+        }
+    }
+    found
 }
 
 /// A password input that explicitly opts into unrestricted autocomplete.
@@ -848,6 +1092,108 @@ mod tests {
             find_sensitive_comments("<!-- api_key=AKIA1234 -->").len(),
             1
         );
+    }
+
+    // ── CSRF ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_posting_form_with_no_token_is_reported() {
+        let found = find_posting_forms_without_tokens(
+            r#"<form method="post" action="/transfer"><input name="amount"></form>"#,
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_form_carrying_any_conventional_token_name_is_protected() {
+        for field in [
+            r#"<input type="hidden" name="csrf_token" value="x">"#,
+            r#"<input type="hidden" name="authenticity_token" value="x">"#,
+            r#"<input type="hidden" name="__RequestVerificationToken" value="x">"#,
+            r#"<input type="hidden" name="_token" value="x">"#,
+        ] {
+            let body = format!(r#"<form method="post" action="/t">{field}</form>"#);
+            assert!(
+                find_posting_forms_without_tokens(&body).is_empty(),
+                "should be protected: {field}"
+            );
+        }
+    }
+
+    /// A search box is not a state-changing request, and reporting one would be
+    /// noise on nearly every site.
+    #[test]
+    fn a_get_form_is_not_a_csrf_finding() {
+        assert!(find_posting_forms_without_tokens(
+            r#"<form method="get" action="/search"><input name="q"></form>"#
+        )
+        .is_empty());
+        // No method attribute defaults to GET.
+        assert!(find_posting_forms_without_tokens(r#"<form action="/search"></form>"#).is_empty());
+    }
+
+    /// Without a bounded window an unclosed form would absorb the next form's
+    /// token and report the wrong one as protected.
+    #[test]
+    fn two_forms_are_judged_independently() {
+        let body = r#"<form method="post"><input name="csrf_token"></form>
+                      <form method="post" action="/b"><input name="x"></form>"#;
+        let found = find_posting_forms_without_tokens(body);
+        assert_eq!(found.len(), 1, "only the second form is unprotected: {found:?}");
+        assert!(found[0].contains("/b"), "{found:?}");
+    }
+
+    // ── iframes ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_cross_origin_frame_without_sandbox_is_reported() {
+        let found = find_unsandboxed_frames(
+            r#"<iframe src="https://widget.other.test/w"></iframe>"#,
+            "https://app.test/",
+        );
+        assert_eq!(found, vec!["https://widget.other.test/w".to_string()]);
+    }
+
+    #[test]
+    fn a_sandboxed_or_same_origin_frame_is_not_reported() {
+        assert!(find_unsandboxed_frames(
+            r#"<iframe src="https://widget.other.test/w" sandbox="allow-scripts"></iframe>"#,
+            "https://app.test/",
+        )
+        .is_empty());
+        // Sandboxing your own content would restrict the application itself.
+        assert!(find_unsandboxed_frames(
+            r#"<iframe src="https://app.test/inner"></iframe>"#,
+            "https://app.test/",
+        )
+        .is_empty());
+    }
+
+    // ── Transport downgrade ─────────────────────────────────────────────────
+
+    #[test]
+    fn a_plaintext_link_back_to_this_site_is_reported() {
+        let found = find_plaintext_self_links(
+            r#"<a href="http://app.test/legacy">old</a>"#,
+            "https://app.test/",
+        );
+        assert_eq!(found, vec!["http://app.test/legacy".to_string()]);
+    }
+
+    /// Another site's transport is that site's configuration to answer for, and
+    /// reporting it would fill the finding with URLs nobody here can fix.
+    #[test]
+    fn a_plaintext_link_to_another_site_is_not_this_applications_finding() {
+        assert!(find_plaintext_self_links(
+            r#"<a href="http://someone-else.test/x">x</a>"#,
+            "https://app.test/",
+        )
+        .is_empty());
+        assert!(find_plaintext_self_links(
+            r#"<a href="https://app.test/fine">ok</a><a href="/relative">ok</a>"#,
+            "https://app.test/",
+        )
+        .is_empty());
     }
 
     #[test]

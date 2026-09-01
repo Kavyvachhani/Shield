@@ -23,7 +23,7 @@ pub mod owasp;
 
 use crate::checklist::CoverageReport;
 use crate::exceptions::ExceptionRecord;
-use crate::models::finding::{Finding, FindingStatus, Severity};
+use crate::models::finding::{Finding, FindingStatus, Severity, FindingKind};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -147,6 +147,10 @@ pub struct ReportFindings {
     pub active: Vec<Finding>,
     /// Findings carried under a formal acceptance.
     pub accepted: Vec<Finding>,
+    /// Records about the assessment's own reach rather than the target's
+    /// security. Never counted, never scored, never in the remediation queue —
+    /// they belong in the coverage narrative.
+    pub information: Vec<Finding>,
 }
 
 impl ReportFindings {
@@ -154,10 +158,34 @@ impl ReportFindings {
     /// highest-risk first.
     pub fn partition(findings: &[Finding]) -> Self {
         let sorted = sort_by_priority(findings);
-        let (accepted, active): (Vec<Finding>, Vec<Finding>) = sorted
+        // Scan information comes out first: it is not a weakness, so it must
+        // not reach the counts, the posture score or the remediation queue.
+        let (information, weaknesses): (Vec<Finding>, Vec<Finding>) = sorted
+            .into_iter()
+            .partition(|f| f.kind == FindingKind::ScanInformation);
+        let (accepted, active): (Vec<Finding>, Vec<Finding>) = weaknesses
             .into_iter()
             .partition(|f| f.status == FindingStatus::AcceptedRisk);
-        Self { active, accepted }
+        Self { active, accepted, information }
+    }
+
+    /// Render the assessment-surface records as report prose, if any exist.
+    ///
+    /// Returns the description and every evidence block, so the caller decides
+    /// where in its own document the coverage narrative belongs.
+    pub fn surface_notes(&self) -> Vec<(&str, Vec<(&str, &str)>)> {
+        self.information
+            .iter()
+            .map(|f| {
+                (
+                    f.description.as_str(),
+                    f.evidences
+                        .iter()
+                        .map(|e| (e.title.as_str(), e.content.as_str()))
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     /// Severity tallies over the live set only.
@@ -586,6 +614,7 @@ mod tests {
             title: title.into(),
             description: "Description text.".into(),
             severity: sev.clone(),
+            kind: FindingKind::default(),
             cvss4: Some(CVSS4Data {
                 vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H".into(),
                 base_score: score,
@@ -611,6 +640,58 @@ mod tests {
             priority_rationale: "because".into(),
             created_at: Utc::now(),
         }
+    }
+
+    /// The record exists so a clean result can be read correctly. If it were
+    /// counted as a finding, every report would gain an issue nobody can fix
+    /// and the informational tally would be permanently off by one.
+    #[test]
+    fn scan_information_is_never_counted_as_a_finding() {
+        let mut note = finding("Assessment Surface", Severity::Info, 0.0);
+        note.kind = crate::models::finding::FindingKind::ScanInformation;
+
+        let split = ReportFindings::partition(&[
+            finding("real", Severity::High, 8.0),
+            note,
+        ]);
+
+        assert_eq!(split.active.len(), 1, "only the weakness is a finding");
+        assert_eq!(split.information.len(), 1);
+        assert_eq!(split.counts().total(), 1);
+        assert_eq!(split.counts().info, 0, "the record must not inflate the info tally");
+    }
+
+    #[test]
+    fn scan_information_does_not_move_the_posture_score() {
+        let mut note = finding("Assessment Surface", Severity::Info, 0.0);
+        note.kind = crate::models::finding::FindingKind::ScanInformation;
+
+        let with_note = ReportFindings::partition(&[finding("real", Severity::Medium, 5.0), note]);
+        let without = ReportFindings::partition(&[finding("real", Severity::Medium, 5.0)]);
+
+        assert_eq!(
+            PostureScore::compute(&with_note.counts(), None).score,
+            PostureScore::compute(&without.counts(), None).score
+        );
+    }
+
+    #[test]
+    fn surface_notes_carry_the_description_and_every_evidence_block() {
+        let mut note = finding("Assessment Surface", Severity::Info, 0.0);
+        note.kind = crate::models::finding::FindingKind::ScanInformation;
+        note.description = "87 pages were assessed.".into();
+        note.evidences = vec![crate::models::finding::Evidence {
+            evidence_type: "assessment_surface".into(),
+            title: "Pages assessed (87)".into(),
+            content: "https://app.test/".into(),
+            hash: String::new(),
+        }];
+
+        let split = ReportFindings::partition(&[note]);
+        let notes = split.surface_notes();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].0, "87 pages were assessed.");
+        assert_eq!(notes[0].1[0].0, "Pages assessed (87)");
     }
 
     #[test]

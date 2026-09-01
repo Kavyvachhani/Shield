@@ -1,4 +1,4 @@
-use crate::models::finding::{Finding, Severity, FindingStatus, Evidence};
+use crate::models::finding::{Finding, Severity, FindingStatus, Evidence, FindingKind};
 use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
@@ -40,6 +40,7 @@ impl SemgrepJsonParser {
                     title: format!("SAST: {}", check_id),
                     description: message.to_string(),
                     severity,
+                    kind: FindingKind::default(),
                     cvss4: None,
                     epss: None,
                     kev_listed: false,

@@ -11,6 +11,27 @@ pub enum Severity {
     Info,
 }
 
+/// What a record in the findings list actually is.
+///
+/// Engines produce two different things and the reports have to tell them
+/// apart. A weakness belongs in the counts, the posture score and the
+/// remediation queue. A statement about the assessment itself — how many pages
+/// were reached, which were not, which third-party origins the application
+/// depends on — belongs in the coverage narrative, and counting it as a finding
+/// would inflate the numbers with something nobody can remediate.
+///
+/// Defaults to `Weakness` so records written before this existed still load,
+/// and so an engine that does not set it cannot accidentally have its findings
+/// filtered out of a report.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingKind {
+    #[default]
+    Weakness,
+    /// Information about the scan's own reach, not about the target's security.
+    ScanInformation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FindingStatus {
     Open,
@@ -58,6 +79,9 @@ pub struct Finding {
     pub title: String,
     pub description: String,
     pub severity: Severity,
+    /// Whether this is a weakness or a statement about the assessment itself.
+    #[serde(default)]
+    pub kind: FindingKind,
     
     pub cvss4: Option<CVSS4Data>,
     pub epss: Option<EPSSData>,

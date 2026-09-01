@@ -1,4 +1,4 @@
-use crate::models::finding::{Finding, Severity, FindingStatus, Evidence};
+use crate::models::finding::{Finding, Severity, FindingStatus, Evidence, FindingKind};
 use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
@@ -31,6 +31,7 @@ impl GitleaksJsonParser {
                 title: format!("Secret Leak: {} ({})", description, rule_id),
                 description: format!("Gitleaks identified hardcoded secret pattern '{}' in repository code.", rule_id),
                 severity: Severity::Critical,
+                kind: FindingKind::default(),
                 cvss4: Some(crate::models::finding::CVSS4Data {
                     vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H".into(),
                     base_score: 9.5,

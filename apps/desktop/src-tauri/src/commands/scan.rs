@@ -842,7 +842,7 @@ mod tests {
 
     /// Minimal finding at a given severity — only `severity` matters here.
     fn finding(severity: sentinel_core::models::finding::Severity) -> sentinel_core::models::finding::Finding {
-        use sentinel_core::models::finding::{Finding, FindingStatus};
+        use sentinel_core::models::finding::{Finding, FindingStatus, FindingKind};
         Finding {
             id: uuid::Uuid::new_v4(),
             scan_id: uuid::Uuid::new_v4(),
@@ -850,6 +850,7 @@ mod tests {
             title: "t".into(),
             description: "d".into(),
             severity,
+            kind: FindingKind::default(),
             cvss4: None,
             epss: None,
             kev_listed: false,

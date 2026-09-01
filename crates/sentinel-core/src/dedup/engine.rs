@@ -137,7 +137,7 @@ impl DeduplicationEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::finding::{Finding, Severity, FindingStatus, CVSS4Data};
+    use crate::models::finding::{Finding, Severity, FindingStatus, CVSS4Data, FindingKind};
     use uuid::Uuid;
     use chrono::Utc;
 
@@ -151,6 +151,7 @@ mod tests {
             title: title.into(),
             description: "Test".into(),
             severity: Severity::High,
+            kind: FindingKind::default(),
             cvss4: Some(CVSS4Data {
                 vector_string: String::new(),
                 base_score: cvss,

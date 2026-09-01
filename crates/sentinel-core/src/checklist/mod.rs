@@ -311,7 +311,7 @@ fn finding_matches_item(finding: &Finding, item: &ChecklistItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::finding::{FindingStatus, Severity};
+    use crate::models::finding::{FindingStatus, Severity, FindingKind};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -323,6 +323,7 @@ mod tests {
             title: "t".into(),
             description: "d".into(),
             severity: sev,
+            kind: FindingKind::default(),
             cvss4: None,
             epss: None,
             kev_listed: false,

@@ -46,6 +46,7 @@ pub fn render(
   {triage_guide}
   {rollup}
   {index}
+  {surface}
   {untested}
   {details}
   {accepted}
@@ -62,6 +63,7 @@ pub fn render(
         triage_guide = triage_guide(&split),
         rollup = owasp_rollup(&split.active),
         index = index_table(&split.active),
+        surface = surface_section(&split),
         untested = untested_section(coverage),
         details = detail_sections(&split.active),
         accepted = accepted_section(ctx, &split),
@@ -681,6 +683,40 @@ still require manual analysis.</div>"##
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>"##
+    )
+}
+
+/// What the scan reached, before the reader draws conclusions from what it did
+/// not find.
+fn surface_section(split: &ReportFindings) -> String {
+    let notes = split.surface_notes();
+    if notes.is_empty() {
+        return String::new();
+    }
+
+    let body: String = notes
+        .iter()
+        .map(|(description, evidences)| {
+            let blocks: String = evidences
+                .iter()
+                .map(|(title, content)| {
+                    format!(
+                        r##"<div class="section-label">{title}</div><pre>{content}</pre>"##,
+                        title = html(title),
+                        content = html(content),
+                    )
+                })
+                .collect();
+            format!("<p>{}</p>{blocks}", html_multiline(description))
+        })
+        .collect();
+
+    format!(
+        r##"<h2 class="page-break">Assessment Surface</h2>
+<p>What this scan reached. Read it before drawing a conclusion from what is <em>not</em> in the
+findings above — an unvisited route was not assessed, and absence of a finding there is absence of
+evidence rather than evidence of absence.</p>
+{body}"##
     )
 }
 
