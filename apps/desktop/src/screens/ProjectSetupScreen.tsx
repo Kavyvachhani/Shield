@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FolderOpen, Globe, Code2, Cpu, ChevronRight, Plus, CheckCircle2, KeyRound } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FolderOpen, Globe, Code2, Cpu, ChevronRight, Plus, CheckCircle2, KeyRound, History, Loader2 } from 'lucide-react';
 import type { Project, Target, CreateProjectInput, CreateTargetInput, CredentialKind } from '../types';
 import { api } from '../lib/tauri';
 
@@ -56,6 +56,48 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
   const [credUsername, setCredUsername]     = useState('');
   const [credSecret, setCredSecret]         = useState('');
   const [credHeaderName, setCredHeaderName] = useState('');
+
+  // Saved engagements.
+  //
+  // Everything an analyst does is written to a local database as it happens —
+  // the signed Rules of Engagement above all. Until now none of it was
+  // reachable: the app always opened on a blank form, so a restart mid-
+  // engagement meant the findings, the triage decisions and the signed
+  // authorisation were all on disk and none of them could be opened again.
+  const [saved, setSaved] = useState<Project[]>([]);
+  const [resuming, setResuming] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listProjects().then(setSaved).catch(() => setSaved([]));
+  }, []);
+
+  /// Reopen an engagement: load its project, then its target.
+  ///
+  /// A project with no target cannot be resumed to the scan stage, so it drops
+  /// the analyst into step 2 with the project selected rather than failing.
+  async function resume(existing: Project) {
+    setResuming(existing.id);
+    setError('');
+    try {
+      const targets = await api.listTargets(existing.id);
+      if (targets.length === 0) {
+        setProject(existing);
+        setCompanyName(existing.companyName);
+        setEngagementName(existing.name);
+        setStep(2);
+        return;
+      }
+      // Most engagements have one target; the most recent is the one being
+      // worked on.
+      const target = targets.reduce((latest, t) =>
+        t.createdAt > latest.createdAt ? t : latest, targets[0]);
+      onProjectTargetReady(existing, target);
+    } catch (err) {
+      setError(`Could not reopen that engagement: ${String(err)}`);
+    } finally {
+      setResuming(null);
+    }
+  }
 
   async function handleCreateProject(e: React.FormEvent) {
     e.preventDefault();
@@ -156,6 +198,48 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
           </div>
         ))}
       </div>
+
+      {step === 1 && saved.length > 0 && (
+        <div style={{ marginBottom: 28 }}>
+          <SectionHeader
+            icon={<History size={18} />}
+            title="Resume an Engagement"
+            subtitle="Saved on this machine — findings, triage decisions and the signed authorisation are all restored"
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+            {saved.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => void resume(p)}
+                disabled={resuming !== null}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  gap: 12, padding: '12px 14px', textAlign: 'left',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)', cursor: resuming ? 'wait' : 'pointer',
+                  opacity: resuming && resuming !== p.id ? 0.5 : 1,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {p.companyName}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                    {p.name} · created {new Date(p.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                {resuming === p.id
+                  ? <Loader2 size={15} className="spin" style={{ color: 'var(--cyan)' }} />
+                  : <ChevronRight size={15} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)' }}>
+            Or start a new engagement below.
+          </div>
+        </div>
+      )}
 
       {step === 1 && (
         <form onSubmit={handleCreateProject}>

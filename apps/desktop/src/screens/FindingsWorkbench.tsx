@@ -4,7 +4,7 @@ import {
   ShieldOff, Undo2, CalendarClock, FileUp,
 } from 'lucide-react';
 import type {
-  Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord,
+  Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord, Evidence,
 } from '../types';
 import { api } from '../lib/tauri';
 
@@ -55,6 +55,14 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
   const importInput = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState('');
+
+  // The evidence bodies. `listFindings` returns a count but not the content —
+  // and the count is not what an analyst deciding whether something is a false
+  // positive actually needs. Fetched per finding rather than for the whole
+  // table, because an evidence block can be kilobytes and most rows are never
+  // opened.
+  const [evidences, setEvidences] = useState<Evidence[]>([]);
+  const [evidenceFor, setEvidenceFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,6 +153,34 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
       setImporting(false);
     }
   }
+
+  // Load evidence when the selected finding changes.
+  useEffect(() => {
+    if (!selected || selected.evidenceCount === 0) {
+      setEvidences([]);
+      setEvidenceFor(null);
+      return;
+    }
+    let active = true;
+    const id = selected.id;
+    api
+      .getFindingDetail(id)
+      .then((detail) => {
+        if (active) {
+          setEvidences(detail.evidences);
+          setEvidenceFor(id);
+        }
+      })
+      .catch(() => {
+        // Evidence is supporting detail, not the reason the panel exists: a
+        // failure here must not blank out the finding the analyst is reading.
+        if (active) {
+          setEvidences([]);
+          setEvidenceFor(id);
+        }
+      });
+    return () => { active = false; };
+  }, [selected]);
 
   /** The standing decision covering a finding, if there is one. */
   function exceptionFor(f: Finding): ExceptionRecord | undefined {
@@ -415,6 +451,39 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 {selected.remediation}
               </div>
             </DetailSection>
+
+            {/* Evidence — what the finding is actually based on. Placed above
+                triage because the decision depends on reading it. */}
+            {selected.evidenceCount > 0 && (
+              <DetailSection title={`Evidence (${selected.evidenceCount}, sanitized)`}>
+                {evidenceFor !== selected.id ? (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading evidence…</div>
+                ) : evidences.length === 0 ? (
+                  <div style={{ fontSize: 11, color: 'var(--amber)', lineHeight: 1.6 }}>
+                    This finding records {selected.evidenceCount} artefact
+                    {selected.evidenceCount === 1 ? '' : 's'}, but they could not be loaded.
+                    Verify by hand before triaging.
+                  </div>
+                ) : (
+                  evidences.map((e, i) => (
+                    <div key={i} style={{ marginBottom: 10 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>{e.title}</span>
+                        <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>{e.evidenceType}</span>
+                      </div>
+                      <pre style={{ margin: 0, padding: '10px 12px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 10.5, lineHeight: 1.6, color: 'var(--text-code)', fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflow: 'auto' }}>
+                        {e.content}
+                      </pre>
+                      {e.hash && (
+                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, fontFamily: "'JetBrains Mono', monospace" }}>
+                          SHA-256 {e.hash.slice(0, 32)}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </DetailSection>
+            )}
 
             {/* Validation confidence — the developer report shows the same figure,
                 so a reviewer here and a reader there start from the same claim. */}
