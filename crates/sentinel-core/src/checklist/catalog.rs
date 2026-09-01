@@ -52,6 +52,10 @@ pub mod engine {
     pub const RETIREJS: &str = "retire.js";
     /// Web server misconfiguration and forgotten-file discovery.
     pub const NIKTO: &str = "Nikto";
+    /// Deep TLS: what the server will actually negotiate, not just its cert.
+    pub const TESTSSL: &str = "testssl.sh";
+    /// Infrastructure-as-code misconfiguration — what the app is deployed onto.
+    pub const CHECKOV: &str = "Checkov";
     pub const ANALYST: &str = "Analyst";
 }
 
@@ -206,7 +210,7 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CONF-01", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Test Network Infrastructure Configuration",
-        coverage: Partial, engines: E_NATIVE_NUCLEI, owasp_2025: A02, cwe: "CWE-16",
+        coverage: Partial, engines: &[engine::NATIVE, engine::NUCLEI, engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
         client_summary: "Review the hosting and network configuration for insecure defaults.",
     },
     ChecklistItem {
@@ -622,7 +626,9 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CRYP-01", category_code: "CRYP", category: "Cryptography",
         name: "Testing for Weak Transport Layer Security",
-        coverage: Automated, engines: E_NATIVE_NUCLEI, owasp_2025: A04, cwe: "CWE-326",
+        coverage: Automated,
+        engines: &[engine::NATIVE, engine::NUCLEI, engine::TESTSSL],
+        owasp_2025: A04, cwe: "CWE-326",
         client_summary: "Verify the encrypted connection uses modern protocols and a valid certificate.",
     },
     ChecklistItem {
@@ -634,13 +640,17 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CRYP-03", category_code: "CRYP", category: "Cryptography",
         name: "Testing for Sensitive Information Sent via Unencrypted Channels",
-        coverage: Automated, engines: E_NATIVE, owasp_2025: A04, cwe: "CWE-319",
+        coverage: Automated,
+        engines: &[engine::NATIVE, engine::TESTSSL],
+        owasp_2025: A04, cwe: "CWE-319",
         client_summary: "Confirm no sensitive data is transmitted without encryption.",
     },
     ChecklistItem {
         id: "WSTG-CRYP-04", category_code: "CRYP", category: "Cryptography",
         name: "Testing for Weak Encryption",
-        coverage: Partial, engines: E_SEMGREP, owasp_2025: A04, cwe: "CWE-327",
+        coverage: Partial,
+        engines: &[engine::SEMGREP, engine::NATIVE, engine::TESTSSL],
+        owasp_2025: A04, cwe: "CWE-327",
         client_summary: "Look for outdated or broken encryption algorithms in the codebase.",
     },
 
@@ -824,6 +834,12 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
         name: "Known-Vulnerable Client-Side Libraries",
         coverage: Automated, engines: &[engine::RETIREJS], owasp_2025: A03, cwe: "CWE-1395",
         client_summary: "Check the JavaScript the browser actually receives for library versions with published vulnerabilities.",
+    },
+    ChecklistItem {
+        id: "SV-IAC-01", category_code: "CONF", category: "Configuration & Deployment Management",
+        name: "Infrastructure-as-Code Misconfiguration",
+        coverage: Automated, engines: &[engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
+        client_summary: "Review the Terraform, Kubernetes and container definitions the application is deployed from, for resources that are public, unencrypted or over-privileged by declaration.",
     },
 ];
 

@@ -3,6 +3,8 @@ pub mod osv;
 pub mod retirejs;
 pub mod trufflehog;
 pub mod nikto;
+pub mod testssl;
+pub mod checkov;
 pub mod sarif;
 pub mod semgrep;
 pub mod trivy;

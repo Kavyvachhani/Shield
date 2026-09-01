@@ -107,6 +107,10 @@ Two pairs are deliberately run together rather than one instead of the other:
 - **Trivy + OSV-Scanner** use different vulnerability databases. A CVE both report is a
   stronger claim than one either reports alone, and deduplication raises the finding's
   reachability when two engines confirm it.
+- **Sentinel Native + testssl.sh** split TLS between them. The built-in engine reads the
+  certificate — validity, hostname, expiry, signature strength. testssl.sh establishes what
+  the server will actually *negotiate*, which takes dozens of handshakes: protocol versions,
+  cipher suites, forward secrecy, and the named attacks that come up in every assessment.
 - **Gitleaks + TruffleHog** answer different questions. Gitleaks finds strings that look
   like credentials; TruffleHog asks the provider whether they still authenticate. A
   verified secret is Critical and cannot be an example key or a rotated one — which is
@@ -124,6 +128,8 @@ Two pairs are deliberately run together rather than one instead of the other:
 | **TruffleHog** | Secrets — verified against the provider | No | `brew install trufflehog` · [releases](https://github.com/trufflesecurity/trufflehog/releases) |
 | **retire.js** | Vulnerable client-side JS libraries | No | `npm install -g retire` |
 | **Nikto** | Web server misconfiguration and forgotten files | No | `brew install nikto` · `apt install nikto` |
+| **testssl.sh** | Deep TLS — protocols, ciphers, named attacks | No | `brew install testssl` · [testssl.sh](https://testssl.sh/) |
+| **Checkov** | Infrastructure-as-code (Terraform, K8s, Docker) | No | `pip install checkov` · `brew install checkov` |
 
 SentinelVAPT finds these automatically on PATH, and also checks the conventional
 install locations — Chocolatey and Scoop shims, `%ProgramFiles%`, `~/go/bin`,

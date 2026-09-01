@@ -278,6 +278,142 @@ impl ScannerAdapter for NiktoAdapter {
     }
 }
 
+// ── testssl.sh ───────────────────────────────────────────────────────────────
+
+/// Deep TLS assessment: what the server will actually negotiate.
+///
+/// The native engine reads the certificate, which is the shallow half. This is
+/// the other half — protocol versions, cipher suites, forward secrecy, and the
+/// named attacks — and answering it means completing dozens of handshakes with
+/// the server, which is why it is gated behind the signed RoE like every other
+/// engine that touches the network.
+pub struct TestSslAdapter;
+
+#[async_trait]
+impl ScannerAdapter for TestSslAdapter {
+    fn name(&self) -> &'static str {
+        "testssl.sh"
+    }
+
+    async fn healthcheck(&self) -> Result<bool> {
+        // Shipped under both names depending on how it was installed.
+        Ok(LocalCliRunner::is_installed("testssl.sh") || LocalCliRunner::is_installed("testssl"))
+    }
+
+    async fn run(&self, target: &Target, config_json: &str) -> Result<Vec<Finding>> {
+        let cfg = DastConfig::from_json(config_json)?;
+
+        let host = tls_endpoint(&target.base_url).ok_or_else(|| {
+            anyhow!(
+                "testssl.sh assesses TLS, and this target is not served over HTTPS. \
+                 Nothing to negotiate with."
+            )
+        })?;
+
+        let binary = if LocalCliRunner::is_installed("testssl.sh") {
+            "testssl.sh"
+        } else {
+            "testssl"
+        };
+
+        let args = vec![
+            // Findings to stdout, so nothing is written into the analyst's
+            // working directory.
+            "--jsonfile-pretty".to_string(),
+            "-".to_string(),
+            "--quiet".to_string(),
+            "--color".to_string(),
+            "0".to_string(),
+            // Never mutate, never guess credentials: this tool has no such
+            // mode, but the flags say so explicitly for anyone reading the
+            // invocation.
+            "--severity".to_string(),
+            "LOW".to_string(),
+            "--openssl-timeout".to_string(),
+            "30".to_string(),
+            host.clone(),
+        ];
+
+        let _ = cfg;
+        let Some(output) = run_tool(binary, &args).await? else {
+            return Ok(vec![]);
+        };
+
+        // The tool prints a banner before its JSON.
+        let json = match output.find(['{', '[']) {
+            Some(at) => &output[at..],
+            None => return Ok(vec![]),
+        };
+        if json.trim().is_empty() {
+            return Ok(vec![]);
+        }
+
+        sentinel_core::parser::testssl::TestSslParser::parse(json, target.id, Uuid::new_v4())
+            .context("testssl.sh output could not be parsed")
+    }
+}
+
+/// The `host:port` testssl.sh should assess, or `None` for a plaintext target.
+fn tls_endpoint(base_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(base_url.trim_end_matches('/')).ok()?;
+    if parsed.scheme() != "https" {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    Some(format!("{host}:{}", parsed.port().unwrap_or(443)))
+}
+
+// ── Checkov ──────────────────────────────────────────────────────────────────
+
+/// Infrastructure-as-code misconfiguration.
+///
+/// Every other engine here looks at the application. This looks at what the
+/// application is deployed onto, where the findings have a different blast
+/// radius: a security group open to the internet is not something application
+/// hardening compensates for.
+///
+/// A repository with no Terraform, CloudFormation, Kubernetes or Docker
+/// definitions produces nothing, which is a correct result rather than a
+/// failure.
+pub struct CheckovAdapter;
+
+#[async_trait]
+impl ScannerAdapter for CheckovAdapter {
+    fn name(&self) -> &'static str {
+        "Checkov"
+    }
+
+    async fn healthcheck(&self) -> Result<bool> {
+        Ok(LocalCliRunner::is_installed("checkov"))
+    }
+
+    async fn run(&self, target: &Target, _config_json: &str) -> Result<Vec<Finding>> {
+        let path = repo_path(target, "Checkov")?;
+        let args = vec![
+            "--directory".to_string(),
+            path.clone(),
+            "--output".to_string(),
+            "json".to_string(),
+            "--quiet".to_string(),
+            "--compact".to_string(),
+            // Exit 0 even when checks fail, so a finding is not reported to the
+            // pipeline as the tool having crashed.
+            "--soft-fail".to_string(),
+        ];
+
+        let Some(output) = run_tool("checkov", &args).await? else {
+            return Ok(vec![]);
+        };
+        let trimmed = output.trim();
+        if trimmed.is_empty() {
+            return Ok(vec![]);
+        }
+
+        sentinel_core::parser::checkov::CheckovParser::parse(trimmed, target.id, Uuid::new_v4())
+            .context("Checkov output could not be parsed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +449,8 @@ mod tests {
             TruffleHogAdapter.healthcheck().await,
             RetireJsAdapter.healthcheck().await,
             NiktoAdapter.healthcheck().await,
+            TestSslAdapter.healthcheck().await,
+            CheckovAdapter.healthcheck().await,
         ] {
             assert!(ok.is_ok());
         }
@@ -345,5 +483,24 @@ mod tests {
         assert_eq!(TruffleHogAdapter.name(), "TruffleHog");
         assert_eq!(RetireJsAdapter.name(), "retire.js");
         assert_eq!(NiktoAdapter.name(), "Nikto");
+        assert_eq!(TestSslAdapter.name(), "testssl.sh");
+        assert_eq!(CheckovAdapter.name(), "Checkov");
+    }
+
+    /// There is nothing to negotiate with over plaintext, and saying so beats
+    /// running the tool and reporting an empty result as success.
+    #[tokio::test]
+    async fn testssl_declines_a_target_that_is_not_https() {
+        let mut plaintext = target(None);
+        plaintext.base_url = "http://app.test".into();
+        let err = TestSslAdapter.run(&plaintext, "{}").await.unwrap_err().to_string();
+        assert!(err.contains("not served over HTTPS"), "{err}");
+    }
+
+    #[test]
+    fn the_tls_endpoint_carries_the_port_and_rejects_plaintext() {
+        assert_eq!(tls_endpoint("https://app.test"), Some("app.test:443".into()));
+        assert_eq!(tls_endpoint("https://app.test:8443/x"), Some("app.test:8443".into()));
+        assert_eq!(tls_endpoint("http://app.test"), None);
     }
 }

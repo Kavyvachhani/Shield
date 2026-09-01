@@ -32,10 +32,12 @@ const STAGE_DEFS: StageStatus[] = [
   { stage: 'osv',         label: 'OSV-Scanner SCA',    stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'trufflehog',  label: 'TruffleHog Verified',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'retirejs',    label: 'retire.js Libraries',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'checkov',     label: 'Checkov IaC',        stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
   { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
   { stage: 'nikto_dast',  label: 'Nikto Web Server',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'testssl_dast',label: 'testssl.sh TLS',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
 ];
 
 // How long to wait for the first engine event before warning. The pipeline

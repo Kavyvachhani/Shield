@@ -16,7 +16,7 @@ pub struct TriggerScanInput {
 /// repository and skip without one; Sentinel Native needs only the target URL,
 /// so it is what makes a URL-only engagement produce results at all.
 const BASELINE_STAGES: &[&str] = &[
-    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "native",
+    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov", "native",
 ];
 
 /// The static analysers, which run concurrently.
@@ -27,7 +27,7 @@ const BASELINE_STAGES: &[&str] = &[
 /// make requests to the same target, and running them together would let their
 /// combined traffic exceed the rate limit the RoE agreed, which is a safety
 /// guarantee rather than a performance setting.
-const STATIC_STAGES: usize = 6;
+const STATIC_STAGES: usize = 7;
 
 /// How long any single stage may run before the pipeline abandons it.
 ///
@@ -36,7 +36,7 @@ const STATIC_STAGES: usize = 6;
 const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Stages added when the analyst opts into active DAST.
-const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast", "nikto_dast"];
+const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast"];
 
 /// Running totals a pipeline accumulates as its stages report.
 ///
@@ -245,19 +245,23 @@ pub async fn trigger_scan(
         // which is a safety guarantee, not just a performance one.
         debug_assert_eq!(
             &stages[..STATIC_STAGES],
-            &["semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs"]
+            &["semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov"]
         );
 
         for (idx, stage_name) in stages[..STATIC_STAGES].iter().enumerate() {
             emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
         }
-        let (semgrep_result, trivy_result, gitleaks_result, osv_result, trufflehog_result, retirejs_result) = tokio::join!(
+        let (
+            semgrep_result, trivy_result, gitleaks_result,
+            osv_result, trufflehog_result, retirejs_result, checkov_result,
+        ) = tokio::join!(
             run_stage_bounded("semgrep", &core_target, &config_json),
             run_stage_bounded("trivy", &core_target, &config_json),
             run_stage_bounded("gitleaks", &core_target, &config_json),
             run_stage_bounded("osv", &core_target, &config_json),
             run_stage_bounded("trufflehog", &core_target, &config_json),
             run_stage_bounded("retirejs", &core_target, &config_json),
+            run_stage_bounded("checkov", &core_target, &config_json),
         );
         for (stage_name, result) in [
             ("semgrep", semgrep_result),
@@ -266,6 +270,7 @@ pub async fn trigger_scan(
             ("osv", osv_result),
             ("trufflehog", trufflehog_result),
             ("retirejs", retirejs_result),
+            ("checkov", checkov_result),
         ] {
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
@@ -530,11 +535,13 @@ async fn run_stage_for(
         "osv"         => sentinel_adapters::external_tools::OsvScannerAdapter.run(target, config_json).await,
         "trufflehog"  => sentinel_adapters::external_tools::TruffleHogAdapter.run(target, config_json).await,
         "retirejs"    => sentinel_adapters::external_tools::RetireJsAdapter.run(target, config_json).await,
+        "checkov"     => sentinel_adapters::external_tools::CheckovAdapter.run(target, config_json).await,
         "zap_dast"    => AuthGatedDastRunner::new(sentinel_adapters::zap::ZapDastAdapter).run(target, config_json).await,
         "nuclei_dast" => AuthGatedDastRunner::new(sentinel_adapters::nuclei::NucleiDastAdapter).run(target, config_json).await,
         // Nikto reaches the network, so it goes through the gate like every
         // other engine that does.
         "nikto_dast"  => AuthGatedDastRunner::new(sentinel_adapters::external_tools::NiktoAdapter).run(target, config_json).await,
+        "testssl_dast" => AuthGatedDastRunner::new(sentinel_adapters::external_tools::TestSslAdapter).run(target, config_json).await,
         other => Err(anyhow::anyhow!("Unknown stage: {}", other)),
     }
 }
@@ -734,10 +741,12 @@ fn engine_name(stage: &str) -> &'static str {
         "osv" => "OSV-Scanner",
         "trufflehog" => "TruffleHog",
         "retirejs" => "retire.js",
+        "checkov" => "Checkov",
         "native" => "Sentinel Native",
         "zap_dast" => "OWASP ZAP",
         "nuclei_dast" => "Nuclei",
         "nikto_dast" => "Nikto",
+        "testssl_dast" => "testssl.sh",
         _ => "Unknown",
     }
 }
@@ -751,10 +760,12 @@ fn engine_label(stage: &str) -> &'static str {
         "osv" => "OSV-Scanner dependency audit",
         "trufflehog" => "TruffleHog verified secrets",
         "retirejs" => "retire.js client library audit",
+        "checkov" => "Checkov infrastructure audit",
         "native" => "Sentinel Native checks",
         "zap_dast" => "OWASP ZAP DAST",
         "nuclei_dast" => "Nuclei DAST",
         "nikto_dast" => "Nikto web server scan",
+        "testssl_dast" => "testssl.sh TLS assessment",
         _ => "Unknown stage",
     }
 }
