@@ -29,6 +29,7 @@ pub mod builder;
 pub mod content;
 pub mod crawl;
 pub mod disclosure;
+pub mod endpoints;
 pub mod exposure;
 pub mod headers;
 pub mod probe;
@@ -126,6 +127,7 @@ impl ScannerAdapter for NativeCheckAdapter {
             crawl::Crawl {
                 pages: vec![root],
                 not_visited: Vec::new(),
+                declared: Vec::new(),
                 external_hosts: Vec::new(),
                 stopped_because: crawl::StopReason::Exhausted,
             }
@@ -171,7 +173,21 @@ impl ScannerAdapter for NativeCheckAdapter {
         // handling, redirects — so they run once against the entry document
         // rather than per page.
         let root = crawl.pages.first().expect("the crawl always contains the root document");
-        findings.extend(active::run(&probe, target_id, scan_id, &base_url, root).await);
+
+        // The per-endpoint checks used to see only `/`. CORS is configured per
+        // route, the accepted methods differ between a static path and an API
+        // path, and a redirect parameter exists on the handful of endpoints
+        // that take one — so they are given the surface the crawl actually
+        // found, and pick a bounded sample from it.
+        let discovered: Vec<String> = crawl
+            .pages
+            .iter()
+            .map(|p| p.final_url.clone())
+            .chain(crawl.declared.iter().map(|e| e.url.clone()))
+            .collect();
+        findings.extend(
+            active::run(&probe, target_id, scan_id, &base_url, root, &discovered).await,
+        );
 
         // ── 6. Sensitive path and metafile exposure ──────────────────────────
         findings.extend(exposure::run(&probe, target_id, scan_id, &base_url).await);

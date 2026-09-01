@@ -27,6 +27,7 @@
 //! has an unbounded URL space, and a scanner that walks into one never
 //! finishes.
 
+use super::endpoints::{self, Endpoint};
 use super::probe::{is_readable, Probe, ProbeResponse};
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -65,6 +66,10 @@ pub struct Crawl {
     /// In-scope URLs that were queued but not fetched, because a limit was hit.
     /// Reported so a clean result cannot be mistaken for a complete one.
     pub not_visited: Vec<String>,
+    /// Endpoints found in the application's own published descriptions rather
+    /// than by following links — the API specification, robots.txt, the
+    /// sitemap, and paths referenced from JavaScript.
+    pub declared: Vec<Endpoint>,
     /// Distinct off-origin hosts the application links to. Not fetched — they
     /// are outside the authorised scope — but worth telling the analyst about,
     /// since third-party origins are where supply-chain risk enters.
@@ -116,6 +121,7 @@ pub async fn discover(
         return Crawl {
             pages: vec![root],
             not_visited,
+            declared: Vec::new(),
             external_hosts: Vec::new(),
             stopped_because: StopReason::Exhausted,
         };
@@ -129,6 +135,21 @@ pub async fn discover(
         }
     }
     pages.push(root);
+
+    // Ask the application what it exposes before guessing from its markup.
+    //
+    // A single-page application has no links to follow: its routes live in a
+    // bundle and its data comes from fetch calls. Its API specification, on the
+    // other hand, is an authoritative list written by the people who built it,
+    // and robots.txt is a list of what the operator did not want found. Both
+    // are fetched here and queued at depth 1, so a declared endpoint is
+    // assessed even when nothing links to it.
+    let declared = declared_endpoints(probe, &origin).await;
+    for endpoint in &declared {
+        if seen.insert(canonical(&endpoint.url)) {
+            queue.push_back((endpoint.url.clone(), 1));
+        }
+    }
 
     while let Some((url, depth)) = queue.pop_front() {
         if pages.len() >= limits.max_pages {
@@ -162,6 +183,13 @@ pub async fn discover(
                     queue.push_back((link, depth + 1));
                 }
             }
+            // A bundle's string literals are the only route list a
+            // single-page application has.
+            for endpoint in script_endpoints(&page, &origin) {
+                if seen.insert(canonical(&endpoint.url)) {
+                    queue.push_back((endpoint.url, depth + 1));
+                }
+            }
         }
         pages.push(page);
     }
@@ -170,7 +198,59 @@ pub async fn discover(
     let mut external_hosts: Vec<String> = external.into_iter().collect();
     external_hosts.sort();
 
-    Crawl { pages, not_visited, external_hosts, stopped_because: stopped }
+    Crawl { pages, not_visited, declared, external_hosts, stopped_because: stopped }
+}
+
+/// Fetch the application's own descriptions of what it exposes.
+///
+/// Each is a single `GET` for a well-known path, and each is a document the
+/// application publishes deliberately. Nothing is guessed.
+async fn declared_endpoints(probe: &Probe, origin: &Url) -> Vec<Endpoint> {
+    let base = origin.clone();
+    let root = origin.as_str().trim_end_matches('/').to_string();
+    let mut found: Vec<Endpoint> = Vec::new();
+
+    // The API specification: the authoritative surface, written by the people
+    // who built the service.
+    for path in ["/openapi.json", "/swagger.json", "/api-docs", "/v3/api-docs"] {
+        let Ok(Some(resp)) = probe.get(&format!("{root}{path}")).await else { continue };
+        if !is_readable(resp.status) {
+            continue;
+        }
+        let parsed = endpoints::from_openapi(&resp.body, &base);
+        if !parsed.is_empty() {
+            found.extend(parsed);
+            break; // One specification is the specification.
+        }
+    }
+
+    // robots.txt: a public list of what the operator did not want indexed.
+    if let Ok(Some(resp)) = probe.get(&format!("{root}/robots.txt")).await {
+        if is_readable(resp.status) {
+            found.extend(endpoints::from_robots(&resp.body, &base));
+        }
+    }
+
+    // sitemap.xml: pages that may have no inbound link at all.
+    if let Ok(Some(resp)) = probe.get(&format!("{root}/sitemap.xml")).await {
+        if is_readable(resp.status) {
+            found.extend(endpoints::from_sitemap(&resp.body));
+        }
+    }
+
+    endpoints::same_origin(found, &base)
+}
+
+/// Endpoints referenced from a script the crawl fetched.
+fn script_endpoints(page: &ProbeResponse, origin: &Url) -> Vec<Endpoint> {
+    let content_type = page.header("content-type").unwrap_or_default().to_lowercase();
+    let is_script = content_type.contains("javascript") || content_type.contains("ecmascript");
+    // Inline scripts live in HTML, so both are worth reading.
+    if !is_script && !content_type.contains("text/html") {
+        return Vec::new();
+    }
+    let base = Url::parse(&page.final_url).unwrap_or_else(|_| origin.clone());
+    endpoints::same_origin(endpoints::from_javascript(&page.body, &base), origin)
 }
 
 /// Same-origin, fetchable links from one document.

@@ -33,6 +33,19 @@ a single priority ranking, and reports written for the two audiences that actual
   URLs it did not get to and why, and the third-party origins the application depends on.
   "No weaknesses found" across eleven pages and the same words across four hundred are
   different claims, and the report now tells them apart.
+- **Asks the application what it exposes, rather than guessing from its markup.** Before
+  following a single link the engine reads the target's own descriptions of itself: the
+  OpenAPI/Swagger specification — the authoritative route list, written by the people who
+  built the service — plus `robots.txt` (a public list of what the operator did not want
+  found), `sitemap.xml`, and the path literals inside JavaScript bundles. That last one is
+  what makes a single-page application assessable at all: its routes and API calls exist
+  only as strings in a bundle, and no link crawler will ever see them. Nothing is guessed,
+  brute-forced or fuzzed — a path is requested because something the application published
+  named it.
+- **Tests each endpoint, not just the front page.** CORS policy, accepted HTTP methods,
+  Host header handling and open redirects are configured per route, so they are assessed
+  per route: one representative per path family, API routes first, bounded to a request
+  budget the signed rate limit can afford.
 - **Assesses the whole application, not the front page.** The engine walks the target
   same-origin, breadth-first, and runs every passive check against each page it reaches —
   so a policy set on `/` but missing on `/admin`, or a key compiled into a lazily loaded

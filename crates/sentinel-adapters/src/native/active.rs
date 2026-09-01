@@ -208,23 +208,105 @@ pub const SPECS: &[CheckSpec] = &[
     OPEN_REDIRECT,
 ];
 
+/// How many discovered endpoints receive the per-endpoint checks, beyond the
+/// origin itself.
+///
+/// Every one of these costs several requests, and they are made against the
+/// live target inside the RoE's rate limit — so this is a budget, not a
+/// preference. Twelve covers an application's distinct route families without
+/// turning a scan into an afternoon.
+const ENDPOINT_SAMPLE: usize = 12;
+
+/// Run the active checks against the origin and a sample of its endpoints.
+///
+/// These used to test `/` and nothing else, which quietly assumed the answers
+/// were properties of the *host*. They are not. CORS is configured per route
+/// and is routinely permissive on `/api` while absent on the home page; the
+/// methods a server accepts differ between a static path and an API path; a
+/// redirect parameter only exists on the handful of endpoints that take one.
+/// Testing the front page and reporting on the application was the wrong
+/// inference from the right observation.
 pub async fn run(
     probe: &Probe,
     target_id: Uuid,
     scan_id: Uuid,
     base_url: &str,
     root: &ProbeResponse,
+    discovered: &[String],
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let origin = base_url.trim_end_matches('/');
 
+    // Transport is genuinely a property of the host: whether the plaintext
+    // endpoint redirects is answered once.
     findings.extend(check_transport(probe, target_id, scan_id, origin, root).await);
-    findings.extend(check_cors(probe, target_id, scan_id, origin).await);
-    findings.extend(check_methods(probe, target_id, scan_id, origin).await);
-    findings.extend(check_host_header(probe, target_id, scan_id, origin).await);
-    findings.extend(check_open_redirect(probe, target_id, scan_id, origin).await);
+
+    for endpoint in endpoints_to_probe(origin, discovered) {
+        findings.extend(check_cors(probe, target_id, scan_id, &endpoint).await);
+        findings.extend(check_methods(probe, target_id, scan_id, &endpoint).await);
+        findings.extend(check_host_header(probe, target_id, scan_id, &endpoint).await);
+        findings.extend(check_open_redirect(probe, target_id, scan_id, &endpoint).await);
+    }
 
     findings
+}
+
+/// The origin plus the endpoints most worth spending the request budget on.
+///
+/// Selection is not arbitrary. API routes come first because that is where a
+/// permissive CORS policy actually costs something — an endpoint returning
+/// JSON to any origin with credentials is the finding this check exists for,
+/// and it is almost never the home page. One endpoint per path family is taken,
+/// since `/api/users/1` and `/api/users/2` are one handler and testing both
+/// spends a request to learn nothing.
+pub fn endpoints_to_probe(origin: &str, discovered: &[String]) -> Vec<String> {
+    let mut chosen = vec![origin.to_string()];
+    let mut families: Vec<String> = vec![path_family(origin)];
+
+    // API-looking paths first, then everything else, so the budget is spent on
+    // the routes where these checks find things.
+    let mut ordered: Vec<&String> = discovered.iter().collect();
+    ordered.sort_by_key(|url| {
+        let lower = url.to_lowercase();
+        let is_api = lower.contains("/api/")
+            || lower.contains("/v1/")
+            || lower.contains("/v2/")
+            || lower.contains("/graphql")
+            || lower.contains("/rest/");
+        (!is_api, url.len())
+    });
+
+    for url in ordered {
+        if chosen.len() > ENDPOINT_SAMPLE {
+            break;
+        }
+        let family = path_family(url);
+        if families.contains(&family) {
+            continue;
+        }
+        families.push(family);
+        chosen.push(url.trim_end_matches('/').to_string());
+    }
+    chosen
+}
+
+/// The route family a URL belongs to: its path with identifier-like segments
+/// replaced, so `/api/users/42` and `/api/users/7` collapse to one.
+fn path_family(url: &str) -> String {
+    let path = url::Url::parse(url)
+        .map(|u| u.path().to_string())
+        .unwrap_or_else(|_| url.to_string());
+
+    path.split('/')
+        .map(|segment| {
+            let is_identifier = !segment.is_empty()
+                && (segment.chars().all(|c| c.is_ascii_digit())
+                    || segment.len() >= 16 && segment.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+            if is_identifier { "{id}" } else { segment }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_ascii_lowercase()
 }
 
 async fn check_transport(
@@ -553,6 +635,74 @@ pub fn extract_context(haystack: &str, needle: &str, window: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The origin is always assessed, whatever else was discovered.
+    #[test]
+    fn the_origin_is_always_probed() {
+        let chosen = endpoints_to_probe("https://app.test", &[]);
+        assert_eq!(chosen, vec!["https://app.test".to_string()]);
+    }
+
+    /// A permissive CORS policy on an endpoint returning JSON is the finding
+    /// this check exists for, and it is almost never the home page. The budget
+    /// has to be spent there first.
+    #[test]
+    fn api_routes_are_probed_before_ordinary_pages() {
+        let discovered: Vec<String> = vec![
+            "https://app.test/about".into(),
+            "https://app.test/contact".into(),
+            "https://app.test/api/v2/orders".into(),
+            "https://app.test/pricing".into(),
+        ];
+        let chosen = endpoints_to_probe("https://app.test", &discovered);
+        let api_at = chosen.iter().position(|u| u.contains("/api/")).expect("the API route must be probed");
+        let page_at = chosen.iter().position(|u| u.contains("/about")).expect("pages are probed too");
+        assert!(api_at < page_at, "API routes come first: {chosen:?}");
+    }
+
+    /// `/api/users/1` and `/api/users/2` are one handler. Probing both spends
+    /// requests against a live target to learn nothing.
+    #[test]
+    fn one_endpoint_per_route_family_is_probed() {
+        let discovered: Vec<String> = (1..=20)
+            .map(|i| format!("https://app.test/api/users/{i}"))
+            .collect();
+        let chosen = endpoints_to_probe("https://app.test", &discovered);
+        assert_eq!(chosen.len(), 2, "the origin and one representative: {chosen:?}");
+    }
+
+    #[test]
+    fn identifier_segments_collapse_regardless_of_their_shape() {
+        assert_eq!(path_family("https://app.test/api/users/42"), path_family("https://app.test/api/users/7"));
+        assert_eq!(
+            path_family("https://app.test/o/3f2a1b4c5d6e7f8a9b0c1d2e"),
+            path_family("https://app.test/o/aaaabbbbccccddddeeeeffff"),
+        );
+        // Distinct routes must stay distinct.
+        assert_ne!(path_family("https://app.test/api/users"), path_family("https://app.test/api/orders"));
+    }
+
+    /// Every probed endpoint costs several live requests inside the RoE's rate
+    /// limit, so the sample is a budget rather than a preference.
+    #[test]
+    fn the_sample_is_bounded_however_much_was_discovered() {
+        let discovered: Vec<String> = (0..500)
+            .map(|i| format!("https://app.test/section{i}/page"))
+            .collect();
+        let chosen = endpoints_to_probe("https://app.test", &discovered);
+        assert!(
+            chosen.len() <= ENDPOINT_SAMPLE + 1,
+            "{} endpoints would exceed the request budget",
+            chosen.len()
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_make_a_second_endpoint() {
+        let chosen = endpoints_to_probe("https://app.test", &["https://app.test/".to_string()]);
+        assert_eq!(chosen.len(), 1, "{chosen:?}");
+    }
+
 
     #[test]
     fn dangerous_methods_are_extracted() {

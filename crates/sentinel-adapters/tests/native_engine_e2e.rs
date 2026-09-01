@@ -111,6 +111,28 @@ fn bad_response(path: &str, origin: Option<&str>) -> String {
             &["Content-Type: application/json".to_string()],
             r#"{"version":3,"file":"app.js","sources":["src/index.ts","src/secret-feature.ts"],"mappings":"AAAA"}"#,
         ),
+        // An OpenAPI document naming a route nothing links to. Finding a
+        // weakness there proves the engine read the specification rather than
+        // only following markup.
+        "/openapi.json" => http(
+            "200 OK",
+            &["Content-Type: application/json".to_string()],
+            r#"{"openapi":"3.0.0","paths":{"/api/v2/unlinked":{"get":{}}}}"#,
+        ),
+        "/api/v2/unlinked" => http(
+            "200 OK",
+            &[
+                "Content-Type: text/html".to_string(),
+                // Only reachable via the specification, and it leaks.
+                "Access-Control-Allow-Origin: https://sentinelvapt.invalid".to_string(),
+                "Access-Control-Allow-Credentials: true".to_string(),
+            ],
+            r#"<!DOCTYPE html><html><body>
+<pre>Traceback (most recent call last):
+  File "/srv/api/v2.py", line 12, in handler
+KeyError: 'tenant'</pre>
+</body></html>"#,
+        ),
         "/robots.txt" => http(
             "200 OK",
             &["Content-Type: text/plain".to_string()],
@@ -366,6 +388,44 @@ async fn a_weakness_only_reachable_by_following_a_link_is_found() {
         trace.affected_component.contains("/reports/quarterly"),
         "the finding must name the page it was actually observed on, not the root: {}",
         trace.affected_component
+    );
+}
+
+/// Nothing in the markup links to this route. It exists only in the
+/// application's own OpenAPI document — which the engine already fetched to
+/// confirm it was readable, and until now never read.
+#[tokio::test]
+async fn an_endpoint_declared_only_in_the_api_specification_is_assessed() {
+    let findings = scan(Posture::Bad).await;
+
+    let from_spec: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.affected_component.contains("/api/v2/unlinked"))
+        .collect();
+
+    assert!(
+        !from_spec.is_empty(),
+        "the specification-declared route was never assessed (all: {:?})",
+        findings.iter().map(|f| &f.affected_component).collect::<Vec<_>>()
+    );
+}
+
+/// CORS is configured per route. Testing `/` and reporting on the application
+/// was the wrong inference from the right observation.
+#[tokio::test]
+async fn cors_is_assessed_per_endpoint_rather_than_only_at_the_root() {
+    let findings = scan(Posture::Bad).await;
+
+    let cors: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.title.contains("CORS"))
+        .collect();
+    assert!(!cors.is_empty(), "no CORS finding at all");
+
+    assert!(
+        cors.iter().any(|f| f.affected_component.contains("/api/v2/unlinked")),
+        "the permissive policy on the API route was missed; only these were checked: {:?}",
+        cors.iter().map(|f| &f.affected_component).collect::<Vec<_>>()
     );
 }
 
