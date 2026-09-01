@@ -774,6 +774,79 @@ fn engine_label(stage: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    /// The failure this guards: adding a stage to `BASELINE_STAGES` without a
+    /// matching arm in `run_stage_for` compiles, ships, and then fails at
+    /// runtime with "Unknown stage" — on a real engagement, after the analyst
+    /// has already signed the RoE and started the scan.
+    #[test]
+    fn every_declared_stage_is_one_the_pipeline_can_actually_run() {
+        for stage in BASELINE_STAGES.iter().chain(DAST_STAGES) {
+            assert_ne!(
+                engine_name(stage),
+                "Unknown",
+                "{stage} is declared but has no engine name; coverage attribution would drop it"
+            );
+            assert_ne!(
+                engine_label(stage),
+                "Unknown stage",
+                "{stage} is declared but has no console label"
+            );
+        }
+    }
+
+    /// Coverage attribution matches on the engine *name*, so a name here that
+    /// does not appear in the catalogue means that engine runs, produces
+    /// findings, and still shows as "Not tested" in the coverage matrix — a
+    /// report that contradicts itself.
+    #[test]
+    fn every_engine_name_is_one_the_checklist_catalogue_knows() {
+        use sentinel_core::checklist::catalog::WSTG_CATALOG;
+
+        let known: Vec<&str> = WSTG_CATALOG
+            .iter()
+            .flat_map(|item| item.engines.iter().copied())
+            .collect();
+
+        for stage in BASELINE_STAGES.iter().chain(DAST_STAGES) {
+            let name = engine_name(stage);
+            assert!(
+                known.contains(&name),
+                "engine '{name}' (stage {stage}) is referenced by no checklist item, so it would \
+                 contribute no coverage however many findings it produced"
+            );
+        }
+    }
+
+    /// The concurrent block indexes `stages[..STATIC_STAGES]` by position and
+    /// names each one in a `tokio::join!`. If the constant and the list drift,
+    /// a network engine gets run concurrently with the others — which would
+    /// exceed the request rate the RoE agreed, and that is a safety guarantee
+    /// rather than a performance setting.
+    #[test]
+    fn the_concurrent_block_covers_exactly_the_static_engines() {
+        assert!(STATIC_STAGES < BASELINE_STAGES.len(), "the native engine runs sequentially");
+
+        for stage in &BASELINE_STAGES[..STATIC_STAGES] {
+            assert!(
+                !stage.ends_with("_dast") && *stage != "native",
+                "{stage} touches the network and must not run in the concurrent block"
+            );
+        }
+        assert_eq!(
+            BASELINE_STAGES[STATIC_STAGES], "native",
+            "the sequential remainder must start at the native engine"
+        );
+    }
+
+    #[test]
+    fn stage_names_are_unique() {
+        let mut all: Vec<&str> = BASELINE_STAGES.iter().chain(DAST_STAGES).copied().collect();
+        let before = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(before, all.len(), "a duplicated stage would run twice and double its findings");
+    }
+
     /// A panicking stage takes the whole pipeline task down between its
     /// "starting" and "complete" events. Before the supervisor existed nothing
     /// noticed: no completion event, no error event, the console kept a stage
