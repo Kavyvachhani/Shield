@@ -22,11 +22,12 @@ a single priority ranking, and reports written for the two audiences that actual
 
 ## What it does
 
-- **Scans without setup.** A built-in native check engine ships 55 checks covering
+- **Scans without setup.** A built-in native check engine ships 61 checks covering
   security headers, TLS configuration, cookie flags, cross-origin isolation, CORS policy,
-  exposure surface, content analysis and information disclosure — including credentials
-  and private keys left in client-delivered JavaScript. No external tool is required on a
-  fresh machine.
+  exposure surface, content analysis, client-side patterns and information disclosure —
+  credentials and private keys left in JavaScript, readable source maps, tokens written to
+  browser storage, wildcard `postMessage`, plaintext WebSockets, and DOM-XSS sink patterns.
+  No external tool is required on a fresh machine.
 - **Assesses the whole application, not the front page.** The engine walks the target
   same-origin, breadth-first, and runs every passive check against each page it reaches —
   so a policy set on `/` but missing on `/admin`, or a key compiled into a lazily loaded

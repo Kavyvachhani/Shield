@@ -6,7 +6,8 @@
 //! content signature so that a catch-all 200 page cannot produce false results.
 
 use super::builder::{CheckSpec, NativeFinding};
-use super::probe::{is_readable, truncate, Probe};
+use super::disclosure::SOURCE_MAP_EXPOSED;
+use super::probe::{is_readable, truncate, Probe, ProbeResponse};
 use sentinel_core::models::finding::Finding;
 use uuid::Uuid;
 
@@ -279,6 +280,142 @@ fn candidates() -> Vec<Candidate> {
 
         Candidate { path: "/graphql", label: "GraphQL endpoint", signatures: &["graphql", "\"errors\"", "must provide query"], spec: &GRAPHQL_INTROSPECTION },
     ]
+}
+
+/// Probe for readable source maps behind the scripts a page loads.
+///
+/// A source map is only discoverable from the script that references it, so
+/// this cannot be a fixed path list like the checks above: it has to read each
+/// page's `<script src>` values and ask for the map beside each one. Both the
+/// conventional `<name>.js.map` and any explicit `//# sourceMappingURL=`
+/// comment are tried.
+///
+/// Still a plain GET per candidate, deduplicated so a bundle referenced from
+/// forty pages is fetched once.
+pub async fn run_source_maps(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    pages: &[ProbeResponse],
+) -> Vec<Finding> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    for page in pages {
+        for candidate in map_candidates(page) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates.truncate(40);
+
+    let mut findings = Vec::new();
+    for url in candidates {
+        let Ok(Some(resp)) = probe.get(&url).await else { continue };
+        if !is_readable(resp.status) || !looks_like_source_map(&resp.body) {
+            continue;
+        }
+
+        findings.push(NativeFinding::build(
+            &SOURCE_MAP_EXPOSED,
+            target_id,
+            scan_id,
+            &url,
+            &format!(
+                "The map returned HTTP {} and parsed as a source map{}.",
+                resp.status,
+                describe_sources(&resp.body)
+            ),
+            vec![format!("curl -sS {url} | head -c 400")],
+            vec![NativeFinding::evidence(
+                "http_response",
+                "Source map response",
+                &truncate(&resp.body, 600),
+            )],
+        ));
+        if findings.len() >= 10 {
+            break;
+        }
+    }
+    findings
+}
+
+/// Map URLs worth trying for one document.
+fn map_candidates(page: &ProbeResponse) -> Vec<String> {
+    let Ok(base) = url::Url::parse(&page.final_url) else { return Vec::new() };
+    let mut out = Vec::new();
+
+    // An explicit sourceMappingURL comment, in a script or in the page itself.
+    let mut cursor = 0usize;
+    while let Some(offset) = page.body[cursor..].find("sourceMappingURL=") {
+        let start = cursor + offset + "sourceMappingURL=".len();
+        cursor = start;
+        let rest = &page.body[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '*' || c == '<')
+            .unwrap_or(rest.len());
+        let value = rest[..end].trim();
+        // A data: map is inline; it is already disclosed and there is nothing
+        // to fetch, so it is not a separate readable artefact.
+        if value.is_empty() || value.starts_with("data:") {
+            continue;
+        }
+        if let Ok(resolved) = base.join(value) {
+            out.push(resolved.to_string());
+        }
+        if out.len() >= 20 {
+            break;
+        }
+    }
+
+    // The conventional sibling of every script the page loads.
+    for tag in page.body.split("<script").skip(1) {
+        let Some(src_at) = tag.to_lowercase().find("src=") else { continue };
+        let rest = &tag[src_at + 4..];
+        let Some(quote) = rest.chars().next() else { continue };
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        let body = &rest[quote.len_utf8()..];
+        let Some(end) = body.find(quote) else { continue };
+        let src = body[..end].trim();
+        if !src.ends_with(".js") {
+            continue;
+        }
+        if let Ok(resolved) = base.join(&format!("{src}.map")) {
+            let as_string = resolved.to_string();
+            if !out.contains(&as_string) {
+                out.push(as_string);
+            }
+        }
+        if out.len() >= 30 {
+            break;
+        }
+    }
+    out
+}
+
+/// Whether a response body is genuinely a source map.
+///
+/// A single-page application answers every unknown path with its index
+/// document, so a 200 proves nothing on its own — the body has to carry the
+/// fields the format defines.
+fn looks_like_source_map(body: &str) -> bool {
+    let head: String = body.chars().take(2000).collect();
+    head.contains("\"version\"")
+        && (head.contains("\"sources\"") || head.contains("\"mappings\""))
+}
+
+/// How many original sources the map exposes, for the finding's detail line.
+fn describe_sources(body: &str) -> String {
+    let head: String = body.chars().take(8000).collect();
+    let Some(at) = head.find("\"sources\"") else { return String::new() };
+    let count = head[at..].chars().take_while(|c| *c != ']').filter(|c| *c == ',').count();
+    if count == 0 {
+        String::new()
+    } else {
+        format!(", exposing roughly {} original source file(s)", count + 1)
+    }
 }
 
 /// Probe well-known sensitive paths on the target's origin.

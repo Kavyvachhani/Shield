@@ -191,6 +191,15 @@ pub fn fp_confidence(spec_id: &str) -> f64 {
         "NATIVE-STACK-TRACE" => 0.12,
         // A same-organisation CDN is often an intentional trust relationship.
         "NATIVE-SRI-MISSING" => 0.15,
+        // The strongest inference in the engine: a URL source and an HTML sink
+        // in the same document is the *shape* of DOM XSS, not a proof of one.
+        // Whether the value is sanitised in between needs a human to read the
+        // code, so this is deliberately the lowest-confidence check shipped.
+        "NATIVE-DOM-XSS-SINK" => 0.55,
+        // A token in the markup may be a public, non-session JWT.
+        "NATIVE-JWT-IN-CONTENT" => 0.20,
+        // The key name is a heuristic: `refresh_banner` is not a credential.
+        "NATIVE-INSECURE-BROWSER-STORAGE" => 0.20,
         // The origin may be fronted by an edge that adds the control after this
         // response left it, which a direct probe cannot see.
         "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => 0.08,
@@ -341,6 +350,13 @@ without authentication from outside your network before scheduling work.",
 carries a preference rather than session state, this is not a finding.",
         "NATIVE-SRI-MISSING" => "The script is loaded from another origin without an integrity hash. If \
 that origin is under your own control the risk is lower, but not zero.",
+        "NATIVE-DOM-XSS-SINK" => "A URL-reading expression and an HTML or code sink were both found in \
+this document. That is the shape of DOM-based XSS, not a demonstration of one — read the code between \
+the two before treating it as exploitable.",
+        "NATIVE-JWT-IN-CONTENT" => "A token matching the JWT structure was found in the page. If it is a \
+public, non-session token the disclosure is limited to whatever claims it carries.",
+        "NATIVE-INSECURE-BROWSER-STORAGE" => "The storage key was matched by name. Confirm the value is \
+genuinely session or credential material rather than a preference that happens to be called 'token'.",
         "NATIVE-CSP-WEAK" | "NATIVE-CACHE-CONTROL" => "Observed on the response from this endpoint. If a \
 CDN or WAF rewrites headers at the edge, confirm the production response before acting.",
         _ => "Observed directly from the live HTTP/TLS response; not inferred.",

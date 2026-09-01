@@ -98,6 +98,19 @@ fn bad_response(path: &str, origin: Option<&str>) -> String {
             &["Content-Type: text/plain".to_string()],
             "ref: refs/heads/main\n",
         ),
+        // A bundle whose source map is left readable — the map is only
+        // discoverable from the script that references it, so finding it proves
+        // the engine followed the reference rather than guessing a path.
+        "/static/app.js" => http(
+            "200 OK",
+            &["Content-Type: application/javascript".to_string()],
+            "console.log('app');\n//# sourceMappingURL=app.js.map\n",
+        ),
+        "/static/app.js.map" => http(
+            "200 OK",
+            &["Content-Type: application/json".to_string()],
+            r#"{"version":3,"file":"app.js","sources":["src/index.ts","src/secret-feature.ts"],"mappings":"AAAA"}"#,
+        ),
         "/robots.txt" => http(
             "200 OK",
             &["Content-Type: text/plain".to_string()],
@@ -148,12 +161,16 @@ ZeroDivisionError: division by zero</pre>
 <a href="https://external.example.test" target="_blank">External</a>
 <a href="/reports/quarterly">Quarterly report</a>
 <form action="/login"><input type="password" name="p" autocomplete="on"></form>
+<script src="/static/app.js"></script>
 <script>
 // AKIAIOSFODNN7EXAMPLE is AWS's own published documentation key. It is on
 // GitHub's secret-scanning allowlist, which is why it can sit here as a whole
 // literal while the fixtures in disclosure.rs have to be assembled at run time.
 var cfg = { awsKey: "AKIAIOSFODNN7EXAMPLE", upstream: "http://10.0.4.17:8080/api" };
 fetch("http://169.254.169.254/latest/meta-data/iam/security-credentials/");
+localStorage.setItem('auth_token', cfg.t);
+parent.postMessage(cfg, "*");
+document.querySelector('#out').innerHTML = decodeURIComponent(location.hash.slice(1));
 </script>
 </body></html>"#,
             )
@@ -274,6 +291,11 @@ async fn misconfigured_server_yields_the_expected_findings() {
         "Cloud Instance Metadata Endpoint Referenced in Client Content",
         "Application Framework and Version Disclosed in Page Metadata",
         "Password Field Explicitly Opts Into Stored-Value Autocomplete",
+        // Client-side and build-artefact classes.
+        "Source Map Publicly Readable",
+        "Session or Credential Material Written to Browser Storage",
+        "Cross-Window Message Sent to Any Origin",
+        "URL-Derived Data Reaches a DOM Injection Sink",
     ] {
         assert!(
             has(&findings, expected),
@@ -329,6 +351,31 @@ async fn a_weakness_only_reachable_by_following_a_link_is_found() {
         trace.affected_component.contains("/reports/quarterly"),
         "the finding must name the page it was actually observed on, not the root: {}",
         trace.affected_component
+    );
+}
+
+/// A source map has no fixed path — it is only discoverable from the script
+/// that references it. Finding this one proves the engine read the bundle and
+/// followed its `sourceMappingURL`, rather than guessing at a well-known path.
+#[tokio::test]
+async fn a_source_map_is_found_by_following_the_bundle_that_references_it() {
+    let findings = scan(Posture::Bad).await;
+
+    let map = findings
+        .iter()
+        .find(|f| f.title.contains("Source Map Publicly Readable"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the source map was not found (all: {:?})",
+                findings.iter().map(|f| &f.title).collect::<Vec<_>>()
+            )
+        });
+
+    assert!(map.affected_component.ends_with("app.js.map"), "{}", map.affected_component);
+    assert!(
+        map.description.contains("original source file"),
+        "the finding should say how much source it exposes: {}",
+        map.description
     );
 }
 
@@ -396,6 +443,12 @@ async fn hardened_server_yields_no_configuration_findings() {
         "External Link Opens a New Tab without noopener",
         "Password Field Explicitly Opts Into",
         "Weak Content-Security-Policy",
+        "Source Map Publicly Readable",
+        "JSON Web Token Embedded",
+        "Session or Credential Material Written to Browser Storage",
+        "Cross-Window Message Sent to Any Origin",
+        "Plaintext WebSocket Referenced",
+        "URL-Derived Data Reaches a DOM Injection Sink",
     ] {
         assert!(
             !has(&findings, unexpected),

@@ -175,6 +175,13 @@ impl ScannerAdapter for NativeCheckAdapter {
         // ── 6. Sensitive path and metafile exposure ──────────────────────────
         findings.extend(exposure::run(&probe, target_id, scan_id, &base_url).await);
 
+        // ── 6b. Source maps behind the scripts the application loads ─────────
+        // Not a fixed path list: a map is only discoverable from the script
+        // that references it, so this needs the pages the crawl actually saw.
+        findings.extend(
+            exposure::run_source_maps(&probe, target_id, scan_id, &crawl.pages).await,
+        );
+
         // ── 7. Score every finding before handing them back ──────────────────
         for finding in &mut findings {
             sentinel_core::scoring::priority::PriorityScoringEngine::score_and_explain(finding);

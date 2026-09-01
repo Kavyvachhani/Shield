@@ -102,7 +102,7 @@ coverage further.
 
 | Engine | Type | Ships with the app? | Install |
 |---|---|---|---|
-| **Sentinel Native** | 55 checks: headers, TLS, cookies, cross-origin isolation, CORS, exposure, content, information disclosure | ✅ Built in | — |
+| **Sentinel Native** | 61 checks: headers, TLS, cookies, cross-origin isolation, CORS, exposure, content, information disclosure | ✅ Built in | — |
 | **Semgrep** | SAST — source code | No | `pip install semgrep` |
 | **Trivy** | SCA — dependency CVEs | No | `winget install AquaSecurity.Trivy` · `brew install trivy` |
 | **Gitleaks** | Secret detection | No | `winget install Gitleaks.Gitleaks` · `brew install gitleaks` |

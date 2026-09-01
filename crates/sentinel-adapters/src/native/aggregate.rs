@@ -331,6 +331,23 @@ mod tests {
         assert_eq!(out.len(), 2, "the safe default is to report rather than merge");
     }
 
+    /// These describe one page or one file each, so merging them would hide
+    /// work: two secrets in two bundles are two problems with two fixes.
+    #[test]
+    fn the_client_side_checks_report_every_location() {
+        for id in [
+            "NATIVE-SECRET-IN-CONTENT",
+            "NATIVE-SOURCEMAP-EXPOSED",
+            "NATIVE-JWT-IN-CONTENT",
+            "NATIVE-INSECURE-BROWSER-STORAGE",
+            "NATIVE-POSTMESSAGE-WILDCARD",
+            "NATIVE-INSECURE-WEBSOCKET",
+            "NATIVE-DOM-XSS-SINK",
+        ] {
+            assert_eq!(aggregation_of(id), Aggregation::PerUrl, "{id}");
+        }
+    }
+
     #[test]
     fn output_order_is_deterministic() {
         let group = vec![

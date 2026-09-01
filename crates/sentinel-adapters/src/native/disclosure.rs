@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
 const OWASP_ACCESS: &str = "A01:2025-Broken Access Control";
+const OWASP_INJECTION: &str = "A05:2025-Injection";
 const OWASP_CRYPTO: &str = "A04:2025-Cryptographic Failures";
 
 const SECRET_IN_CONTENT: CheckSpec = CheckSpec {
@@ -138,6 +139,150 @@ that decides whether an opportunistic attacker bothers with you at all.",
     ],
 };
 
+pub(super) const SOURCE_MAP_EXPOSED: CheckSpec = CheckSpec {
+    id: "NATIVE-SOURCEMAP-EXPOSED",
+    title: "Source Map Publicly Readable",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-540",
+    wstg: "WSTG-CONF-04",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "A JavaScript source map is readable by anonymous visitors. A source map is the \
+original, unminified source — including comments, internal module names, directory structure and \
+any code the bundler tree-shook out of the shipped file but left in the map. It reverses the only \
+practical benefit minification gives an attacker, and hands over the client-side codebase as it \
+was written.\n\nThis is almost always an accident: the bundler emits maps for debugging and the \
+deployment copies the whole output directory.",
+    remediation: "Stop publishing maps to production, or upload them to your error-tracking service \
+and serve them only to authenticated staff. In webpack set `devtool: false` for the production \
+build, or `hidden-source-map` to keep the map for upload without a `sourceMappingURL` comment \
+pointing at it. In Vite set `build.sourcemap: false`. If a map has been public, treat anything \
+sensitive visible in it — endpoint names, feature flags, comments about unreleased work — as \
+disclosed.",
+    references: &[
+        "https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+    ],
+};
+
+const JWT_IN_CONTENT: CheckSpec = CheckSpec {
+    id: "NATIVE-JWT-IN-CONTENT",
+    title: "JSON Web Token Embedded in Client-Delivered Content",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-522",
+    wstg: "WSTG-SESS-09",
+    owasp_2025: OWASP_CRYPTO,
+    api_top10: Some("API2:2023-Broken Authentication"),
+    description: "A JSON Web Token appears in content served to the browser. A JWT is signed, not \
+encrypted: its payload is base64url and readable by anyone holding the token, so whatever claims it \
+carries — user id, email, role, tenant, internal identifiers — are disclosed to every reader of \
+this page.\n\nIf the token is a live session token, embedding it in markup also puts it somewhere a \
+cross-site scripting payload can read and a proxy or browser cache can retain, which is precisely \
+what an HttpOnly cookie exists to prevent.",
+    remediation: "Do not render tokens into markup. Issue session state as a `__Host-` prefixed \
+cookie with Secure, HttpOnly and SameSite, so script cannot read it. If a token genuinely has to \
+reach client-side code, keep it in memory for the lifetime of the page rather than in the document, \
+in localStorage or in a URL. Rotate any token that has been served this way, and check whether it \
+also reached your access logs and CDN cache.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html",
+    ],
+};
+
+const INSECURE_BROWSER_STORAGE: CheckSpec = CheckSpec {
+    id: "NATIVE-INSECURE-BROWSER-STORAGE",
+    title: "Session or Credential Material Written to Browser Storage",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-922",
+    wstg: "WSTG-CLNT-12",
+    owasp_2025: OWASP_CRYPTO,
+    api_top10: None,
+    description: "Client-side code writes something that looks like a token or credential into \
+`localStorage` or `sessionStorage`. Both are readable by any JavaScript running on the origin, so a \
+single cross-site scripting flaw anywhere on the site — including in a third-party script you did \
+not write — reads the value directly. `localStorage` additionally survives the browser closing, so \
+the value persists on a shared machine.\n\nThis is the trade-off a cookie with HttpOnly is designed \
+to remove: script cannot read an HttpOnly cookie, which is what stops an XSS from becoming an \
+account takeover.",
+    remediation: "Move session state into a `__Host-` prefixed cookie with `Secure; HttpOnly; \
+SameSite=Lax`, and let the browser attach it rather than the application. Where a value must be \
+reachable from script, hold it in a closure or module scope for the page's lifetime instead of \
+persisting it, and keep its lifetime short.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage",
+    ],
+};
+
+const POSTMESSAGE_WILDCARD: CheckSpec = CheckSpec {
+    id: "NATIVE-POSTMESSAGE-WILDCARD",
+    title: "Cross-Window Message Sent to Any Origin",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-346",
+    wstg: "WSTG-CLNT-11",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: None,
+    description: "`postMessage` is called with `\"*\"` as the target origin. That tells the browser \
+to deliver the message to whatever document currently occupies the target window, regardless of who \
+it is. If an attacker can influence what loads there — an opener, an iframe whose src they control, \
+a window that has since navigated — they receive whatever the message contains, which is frequently \
+a token or user data.\n\nThe mirror image matters too: a `message` listener that does not check \
+`event.origin` will act on anything any site sends it.",
+    remediation: "Name the origin explicitly: `target.postMessage(data, 'https://app.example.com')`. \
+On the receiving side, check `event.origin` against an allow-list as the first line of the handler \
+and return early otherwise — never inspect the payload before validating the sender.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#web-messaging",
+    ],
+};
+
+const INSECURE_WEBSOCKET: CheckSpec = CheckSpec {
+    id: "NATIVE-INSECURE-WEBSOCKET",
+    title: "Plaintext WebSocket Referenced from an Encrypted Page",
+    cvss_vector: "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-319",
+    wstg: "WSTG-CLNT-10",
+    owasp_2025: OWASP_CRYPTO,
+    api_top10: None,
+    description: "A page served over HTTPS opens a WebSocket over `ws://` rather than `wss://`. The \
+socket carries application traffic — often including the session token used to authenticate it — in \
+clear text, so anyone positioned on the network reads and can modify it. The encrypted page gives \
+the user no indication that part of the session is not encrypted at all.\n\nModern browsers block \
+this as mixed content, which means the feature is also simply broken for most users; the risk lands \
+on whoever is running a client that still permits it.",
+    remediation: "Use `wss://` and terminate TLS at the same place the HTTPS site terminates it. \
+Build the URL from the page's own scheme rather than hardcoding it, so a deployment cannot drift \
+back: `new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + \
+'/socket')`. Verify the Origin header server-side on the upgrade request — WebSockets are not \
+covered by the same-origin policy.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#websockets",
+    ],
+};
+
+const DOM_XSS_SINK: CheckSpec = CheckSpec {
+    id: "NATIVE-DOM-XSS-SINK",
+    title: "URL-Derived Data Reaches a DOM Injection Sink",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-79",
+    wstg: "WSTG-CLNT-01",
+    owasp_2025: OWASP_INJECTION,
+    api_top10: None,
+    description: "Client-side code reads a value out of the URL — `location.hash`, `location.search` \
+or `document.URL` — and passes it to a sink that parses HTML or evaluates code, such as `innerHTML`, \
+`document.write` or `eval`. That is the shape of DOM-based cross-site scripting: the payload never \
+reaches the server, so no server-side filter or WAF sees it, and nothing in a server log records \
+the attack.\n\nThis check reports the *pattern*, not a proven exploit. Whether it is reachable \
+depends on whether the value is sanitised between the source and the sink, which needs a human to \
+read the surrounding code.",
+    remediation: "Assign untrusted values with `textContent` or `setAttribute` rather than \
+`innerHTML`, and never pass them to `eval`, `Function`, `setTimeout` with a string body, or \
+`document.write`. Where HTML genuinely has to be constructed, run it through DOMPurify first. \
+Enabling Trusted Types (`Content-Security-Policy: require-trusted-types-for 'script'`) makes the \
+unsafe assignment throw rather than execute, which turns this class of bug into a test failure.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/DOM_based_XSS_Prevention_Cheat_Sheet.html",
+    ],
+};
+
 /// Every check this module can raise.
 ///
 /// Exposed so the spec audit can walk all shipped checks and confirm each one
@@ -148,6 +293,12 @@ pub const SPECS: &[CheckSpec] = &[
     INTERNAL_HOST_DISCLOSURE,
     CLOUD_METADATA_REFERENCE,
     GENERATOR_DISCLOSURE,
+    SOURCE_MAP_EXPOSED,
+    JWT_IN_CONTENT,
+    INSECURE_BROWSER_STORAGE,
+    POSTMESSAGE_WILDCARD,
+    INSECURE_WEBSOCKET,
+    DOM_XSS_SINK,
 ];
 
 /// Run every disclosure check against one response.
@@ -234,6 +385,78 @@ pub fn run(target_id: Uuid, scan_id: Uuid, resp: &ProbeResponse) -> Vec<Finding>
             format!("Client-delivered content references the {provider} instance metadata endpoint."),
             vec![format!("curl -sS {url} | grep -F '169.254.169.254'")],
             truncate(&extract_context(body, "169.254.169.254", 200), 300),
+        ));
+    }
+
+    // ── Client-side patterns ─────────────────────────────────────────────────
+    let jwts = detect_jwts(body);
+    if !jwts.is_empty() {
+        findings.push(make(
+            &JWT_IN_CONTENT,
+            format!(
+                "{} JSON Web Token(s) were found in content served to the browser.",
+                jwts.len()
+            ),
+            vec![format!("curl -sS {url} | grep -oE 'eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.'")],
+            jwts.join("\n"),
+        ));
+    }
+
+    let storage = detect_storage_of_secrets(body);
+    if !storage.is_empty() {
+        findings.push(make(
+            &INSECURE_BROWSER_STORAGE,
+            format!(
+                "{} write(s) of credential-shaped keys into browser storage: {}.",
+                storage.len(),
+                truncate(&storage.join(", "), 200)
+            ),
+            vec![format!("curl -sS {url} | grep -oE '(local|session)Storage\\.setItem\\([^)]*\\)'")],
+            storage.join("\n"),
+        ));
+    }
+
+    let wildcard = detect_postmessage_wildcard(body);
+    if !wildcard.is_empty() {
+        findings.push(make(
+            &POSTMESSAGE_WILDCARD,
+            format!("{} postMessage call(s) target any origin.", wildcard.len()),
+            vec![format!("curl -sS {url} | grep -oE 'postMessage\\([^)]*\\)'")],
+            wildcard.join("\n"),
+        ));
+    }
+
+    if resp.is_https() {
+        let sockets = detect_plaintext_websockets(body);
+        if !sockets.is_empty() {
+            findings.push(make(
+                &INSECURE_WEBSOCKET,
+                format!(
+                    "{} plaintext WebSocket endpoint(s) referenced from an HTTPS page: {}.",
+                    sockets.len(),
+                    truncate(&sockets.join(", "), 200)
+                ),
+                vec![format!("curl -sS {url} | grep -oE 'ws://[^\"'\'' ]+'")],
+                sockets.join("\n"),
+            ));
+        }
+    }
+
+    let sinks = detect_dom_xss_sinks(body);
+    if !sinks.is_empty() {
+        findings.push(make(
+            &DOM_XSS_SINK,
+            format!(
+                "URL-derived data appears alongside {} DOM injection sink(s): {}.",
+                sinks.len(),
+                sinks.join(", ")
+            ),
+            vec![format!("curl -sS {url} | grep -oE '(innerHTML|document\\.write|eval)\\s*[(=]'")],
+            format!(
+                "Sinks observed: {}\n\nURL sources observed: {}",
+                sinks.join(", "),
+                detect_url_sources(body).join(", ")
+            ),
         ));
     }
 
@@ -450,6 +673,208 @@ pub fn detect_metadata_reference(body: &str) -> Option<&'static str> {
     None
 }
 
+/// JSON Web Tokens in a document, reduced to their header and a fingerprint.
+///
+/// Matched on the structural shape — three base64url segments, the first
+/// starting `eyJ`, which is `{"` encoded — rather than on a keyword, so a
+/// variable merely *called* `token` does not trigger it.
+///
+/// The token is never reproduced in full: its payload carries the very claims
+/// the finding is warning are disclosed, and a report is a document that gets
+/// emailed around.
+pub fn detect_jwts(body: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let bytes: Vec<char> = body.chars().collect();
+    let mut i = 0usize;
+
+    while i + 3 < bytes.len() {
+        if !(bytes[i] == 'e' && bytes[i + 1] == 'y' && bytes[i + 2] == 'J') {
+            i += 1;
+            continue;
+        }
+        // A token must not start in the middle of a longer identifier.
+        if i > 0 && is_b64url(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i;
+        let mut segments: Vec<usize> = Vec::new();
+        let mut segment_start = i;
+        while j < bytes.len() && (is_b64url(bytes[j]) || bytes[j] == '.') {
+            if bytes[j] == '.' {
+                segments.push(j - segment_start);
+                segment_start = j + 1;
+            }
+            j += 1;
+        }
+        segments.push(j - segment_start);
+
+        // header.payload.signature, each long enough to be real.
+        let looks_like_jwt = segments.len() == 3
+            && segments[0] >= 10
+            && segments[1] >= 10
+            && segments[2] >= 8;
+
+        if looks_like_jwt {
+            let token: String = bytes[i..j].iter().collect();
+            let head: String = token.chars().take(18).collect();
+            let entry = format!("{head}… ({} characters, 3 segments)", token.chars().count());
+            if !found.contains(&entry) {
+                found.push(entry);
+            }
+            if found.len() >= 10 {
+                return found;
+            }
+        }
+        i = if j > i { j } else { i + 1 };
+    }
+    found
+}
+
+fn is_b64url(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Keys written into `localStorage`/`sessionStorage` that name credential material.
+///
+/// Only the *key* is inspected, and only when it names something sensitive.
+/// Reporting every write to browser storage would fire on theme preferences and
+/// dismissed banners, which is noise the reader learns to skip past.
+pub fn detect_storage_of_secrets(body: &str) -> Vec<String> {
+    const SENSITIVE: &[&str] = &[
+        "token", "jwt", "auth", "session", "secret", "password", "passwd",
+        "credential", "apikey", "api_key", "access_key", "refresh", "bearer",
+    ];
+    let mut found: Vec<String> = Vec::new();
+
+    for storage in ["localstorage.setitem", "sessionstorage.setitem"] {
+        let lower = body.to_lowercase();
+        let mut cursor = 0usize;
+        while let Some(offset) = lower[cursor..].find(storage) {
+            let open = cursor + offset + storage.len();
+            cursor = open;
+            let Some(rest) = body.get(open..) else { break };
+            let Some(end) = rest.find(')') else { break };
+            let args = &rest[..end.min(160)];
+            let args_lower = args.to_lowercase();
+
+            // The key is the first argument, before the comma.
+            let key = args_lower.split(',').next().unwrap_or("");
+            if SENSITIVE.iter().any(|marker| key.contains(marker)) {
+                let entry = format!(
+                    "{}{}",
+                    storage.replace(".setitem", ".setItem"),
+                    truncate(args, 90)
+                );
+                if !found.contains(&entry) {
+                    found.push(entry);
+                }
+            }
+            if found.len() >= 15 {
+                return found;
+            }
+        }
+    }
+    found
+}
+
+/// `postMessage` calls whose target origin is the `"*"` wildcard.
+pub fn detect_postmessage_wildcard(body: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(offset) = body[cursor..].find("postMessage") {
+        let start = cursor + offset;
+        cursor = start + "postMessage".len();
+        let Some(rest) = body.get(start..) else { break };
+        let Some(end) = rest.find(')') else { continue };
+        let call = &rest[..end + 1];
+
+        // The wildcard is a string literal argument, not a bare asterisk: `* `
+        // appears in multiplication and in comments.
+        if call.contains("\"*\"") || call.contains("'*'") || call.contains("`*`") {
+            let entry = truncate(call, 140);
+            if !found.contains(&entry) {
+                found.push(entry);
+            }
+        }
+        if found.len() >= 10 {
+            break;
+        }
+    }
+    found
+}
+
+/// `ws://` endpoints referenced from a document.
+pub fn detect_plaintext_websockets(body: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(offset) = body[cursor..].find("ws://") {
+        let start = cursor + offset;
+        cursor = start + 5;
+        // `wss://` contains no `ws://`, but `xws://` would; require a boundary.
+        if start > 0 {
+            let prev = body[..start].chars().next_back().unwrap_or(' ');
+            if prev.is_ascii_alphanumeric() {
+                continue;
+            }
+        }
+        let rest = &body[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`' || c == '<')
+            .unwrap_or(rest.len());
+        let endpoint = truncate(&rest[..end], 160);
+        if !found.contains(&endpoint) {
+            found.push(endpoint);
+        }
+        if found.len() >= 10 {
+            break;
+        }
+    }
+    found
+}
+
+/// DOM sinks that parse HTML or evaluate code.
+const DOM_SINKS: &[&str] = &[
+    "innerHTML", "outerHTML", "document.write", "insertAdjacentHTML",
+    "eval(", "Function(", "setTimeout(\"", "setInterval(\"",
+];
+
+/// Sources that read attacker-controllable data out of the URL.
+const URL_SOURCES: &[&str] = &[
+    "location.hash", "location.search", "location.href", "document.URL",
+    "document.documentURI", "document.referrer", "window.name",
+];
+
+/// The URL-reading expressions present in a document.
+pub fn detect_url_sources(body: &str) -> Vec<&'static str> {
+    URL_SOURCES
+        .iter()
+        .filter(|source| body.contains(**source))
+        .copied()
+        .collect()
+}
+
+/// DOM injection sinks, reported only when a URL source is present too.
+///
+/// Either half on its own is ordinary: every application reads `location`, and
+/// `innerHTML` with a constant is harmless. It is the combination that
+/// describes the shape of DOM-based XSS — and even then this is a pattern, not
+/// a proven exploit, which is why the check declares low confidence and says so
+/// in its own description.
+pub fn detect_dom_xss_sinks(body: &str) -> Vec<&'static str> {
+    if detect_url_sources(body).is_empty() {
+        return Vec::new();
+    }
+    DOM_SINKS
+        .iter()
+        .filter(|sink| body.contains(**sink))
+        .copied()
+        .collect()
+}
+
 /// The content of a `<meta name="generator">` tag, when it names a version.
 pub fn detect_generator(body: &str) -> Option<String> {
     let lower = body.to_lowercase();
@@ -657,6 +1082,102 @@ mod tests {
         assert!(detect_generator(r#"<meta name="viewport" content="width=device-width">"#).is_none());
     }
 
+    // ── JWTs ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_jwt_is_detected_by_shape_and_never_reprinted_in_full() {
+        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27u";
+        let hits = detect_jwts(&format!(r#"<script>var t="{token}";</script>"#));
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(!hits[0].contains("dBjftJeZ4CVPmB92K27u"), "the signature must not be reprinted");
+        assert!(hits[0].contains("3 segments"));
+    }
+
+    /// A variable merely called `token` is not a token, and matching on the
+    /// word rather than the structure would fire on every application.
+    #[test]
+    fn a_variable_named_token_is_not_a_jwt() {
+        assert!(detect_jwts(r#"var token = getToken(); var authToken = "abc";"#).is_empty());
+        assert!(detect_jwts("eyJhbGci.short.x").is_empty(), "segments must be long enough");
+        assert!(detect_jwts("eyJhbGciOiJIUzI1NiJ9").is_empty(), "one segment is not a JWT");
+    }
+
+    // ── Browser storage ─────────────────────────────────────────────────────
+
+    #[test]
+    fn credential_shaped_storage_keys_are_reported() {
+        let body = r#"localStorage.setItem('auth_token', t); sessionStorage.setItem("jwt", j);"#;
+        let hits = detect_storage_of_secrets(body);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+    }
+
+    /// Reporting every write to browser storage would fire on theme
+    /// preferences and dismissed banners, which the reader learns to skip.
+    #[test]
+    fn ordinary_preferences_in_storage_are_not_reported() {
+        let body = r#"localStorage.setItem('theme', 'dark');
+                      localStorage.setItem('sidebarCollapsed', '1');
+                      localStorage.setItem('lastSeenRelease', v);"#;
+        assert!(detect_storage_of_secrets(body).is_empty(), "{:?}", detect_storage_of_secrets(body));
+    }
+
+    // ── postMessage ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_wildcard_target_origin_is_reported() {
+        let hits = detect_postmessage_wildcard(r#"parent.postMessage(payload, "*");"#);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    #[test]
+    fn a_named_target_origin_is_correct_and_not_reported() {
+        assert!(detect_postmessage_wildcard(
+            r#"parent.postMessage(payload, "https://app.example.com");"#
+        )
+        .is_empty());
+        // A bare asterisk is multiplication, not a wildcard origin.
+        assert!(detect_postmessage_wildcard("const n = a * b; postMessage(n, origin);").is_empty());
+    }
+
+    // ── WebSockets ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_plaintext_websocket_endpoint_is_extracted() {
+        let hits = detect_plaintext_websockets(r#"new WebSocket("ws://api.app.test/live");"#);
+        assert_eq!(hits, vec!["ws://api.app.test/live".to_string()]);
+    }
+
+    #[test]
+    fn an_encrypted_websocket_is_not_a_finding() {
+        assert!(detect_plaintext_websockets(r#"new WebSocket("wss://api.app.test/live");"#).is_empty());
+    }
+
+    // ── DOM XSS ─────────────────────────────────────────────────────────────
+
+    /// Either half alone is ordinary: every application reads `location`, and
+    /// `innerHTML` with a constant is harmless. Only the pair is a signal.
+    #[test]
+    fn a_sink_is_only_reported_alongside_a_url_source() {
+        let both = r#"el.innerHTML = decodeURIComponent(location.hash.slice(1));"#;
+        assert!(!detect_dom_xss_sinks(both).is_empty(), "the pair must report");
+
+        assert!(
+            detect_dom_xss_sinks(r#"el.innerHTML = "<b>static</b>";"#).is_empty(),
+            "a sink with no URL source is ordinary code"
+        );
+        assert!(
+            detect_dom_xss_sinks(r#"const q = location.search; fetch('/api?' + q);"#).is_empty(),
+            "reading the URL without an HTML sink is ordinary code"
+        );
+    }
+
+    #[test]
+    fn the_url_sources_present_are_reported_for_the_analyst() {
+        let sources = detect_url_sources("x = location.hash; y = document.referrer;");
+        assert!(sources.contains(&"location.hash"));
+        assert!(sources.contains(&"document.referrer"));
+    }
+
     #[test]
     fn a_page_with_nothing_to_disclose_produces_nothing() {
         assert!(detect_secrets("<h1>Hello</h1>").is_empty());
@@ -664,5 +1185,10 @@ mod tests {
         assert!(detect_private_addresses("<h1>Hello</h1>").is_empty());
         assert!(detect_metadata_reference("<h1>Hello</h1>").is_none());
         assert!(detect_generator("<h1>Hello</h1>").is_none());
+        assert!(detect_jwts("<h1>Hello</h1>").is_empty());
+        assert!(detect_storage_of_secrets("<h1>Hello</h1>").is_empty());
+        assert!(detect_postmessage_wildcard("<h1>Hello</h1>").is_empty());
+        assert!(detect_plaintext_websockets("<h1>Hello</h1>").is_empty());
+        assert!(detect_dom_xss_sinks("<h1>Hello</h1>").is_empty());
     }
 }
