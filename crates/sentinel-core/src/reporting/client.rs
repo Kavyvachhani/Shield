@@ -53,6 +53,7 @@ pub fn render(
   {coverage_section}
   {top_risks}
   {accepted}
+  {progress}
   {roadmap}
   {owasp}
   {compliance}
@@ -77,6 +78,7 @@ pub fn render(
         coverage_section = coverage_section(coverage),
         top_risks = top_risks(&split.active),
         accepted = accepted_risk_register(ctx, &split),
+        progress = remediation_progress(ctx),
         roadmap = roadmap(&split.active),
         owasp = owasp_rollup(&split),
         compliance = compliance(&counts, coverage),
@@ -817,6 +819,112 @@ items to confirm the fixes are effective and have not introduced new weaknesses.
     )
 }
 
+/// What changed since the previous assessment.
+///
+/// The question actually asked after a remediation cycle is not "what is wrong"
+/// but "did the work land, and did anything get worse". Without this the reader
+/// has to diff two PDFs by hand, which is how a regression survives a quarter.
+fn remediation_progress(ctx: &ReportContext) -> String {
+    let Some(delta) = ctx.comparison.as_ref() else {
+        return String::new();
+    };
+
+    let row = |label: &str, count: usize, colour: &str, meaning: &str| {
+        format!(
+            r##"<tr>
+  <td><strong>{label}</strong><div class="small muted">{meaning}</div></td>
+  <td style="text-align:center;font-size:22px;font-weight:800;color:{colour}">{count}</td>
+</tr>"##
+        )
+    };
+
+    let resolved_list = if delta.resolved.is_empty() {
+        String::new()
+    } else {
+        let items: String = delta
+            .resolved
+            .iter()
+            .take(15)
+            .map(|f| {
+                format!(
+                    r##"<li>{title} <span class="small muted">({severity} — {component})</span></li>"##,
+                    title = html(&f.title),
+                    severity = charts::severity_name(&f.severity),
+                    component = html(&f.affected_component),
+                )
+            })
+            .collect();
+        format!(
+            r##"<h3>Confirmed closed</h3>
+<p class="small">Each of these was present in the previous assessment and could not be reproduced in
+this one. This is the only place in the report that evidences remediation working — and it is why a
+finding marked fixed by hand is still re-tested rather than taken at its word.</p>
+<ul class="small">{items}</ul>"##
+        )
+    };
+
+    let new_list = if delta.newly_found.is_empty() {
+        String::new()
+    } else {
+        let items: String = delta
+            .newly_found
+            .iter()
+            .take(15)
+            .map(|f| {
+                format!(
+                    r##"<li><span class="pill" style="background:{colour}">{severity}</span>
+                    {title} <span class="small muted">({component})</span></li>"##,
+                    colour = charts::severity_color(&f.severity),
+                    severity = charts::severity_name(&f.severity),
+                    title = html(&f.title),
+                    component = html(&f.affected_component),
+                )
+            })
+            .collect();
+        format!(
+            r##"<h3>Appeared since the previous assessment</h3>
+<p class="small">Either a change introduced these, or the previous assessment could not reach them.
+Both are worth knowing which: the first is a regression in the development process, the second is a
+gap in the previous scope.</p>
+<ul class="small" style="list-style:none;padding-left:0">{items}</ul>"##
+        )
+    };
+
+    format!(
+        r##"<h2 class="page-break">Remediation Progress</h2>
+<p>Compared against assessment <strong>{reference}</strong>, completed {when}. A weakness is treated
+as the same weakness across assessments by its location and classification, not by any identifier the
+scan generated, so a finding that moved from one report to the next is genuinely the same issue.</p>
+<div class="callout"><strong>{verdict}</strong></div>
+<table style="max-width:560px">
+  <tbody>
+    {resolved_row}
+    {new_row}
+    {open_row}
+  </tbody>
+</table>
+{resolved_list}
+{new_list}"##,
+        reference = html(&delta.previous_reference),
+        when = delta.previous_completed_at.format("%d %B %Y"),
+        verdict = html(&delta.verdict()),
+        resolved_row = row(
+            "Closed", delta.resolved.len(), "#16a34a",
+            "Present last time, could not be reproduced now"
+        ),
+        new_row = row(
+            "New", delta.newly_found.len(), "#b91c1c",
+            "Present now, absent last time"
+        ),
+        open_row = row(
+            "Still open", delta.still_open.len(), "#ca8a04",
+            "Present in both — scheduled work that has not landed"
+        ),
+        resolved_list = resolved_list,
+        new_list = new_list,
+    )
+}
+
 /// Where the findings sit against the framework the client's programme tracks.
 ///
 /// A list of twenty findings cannot be reconciled with a security programme
@@ -1547,6 +1655,69 @@ some in-scope pages were not assessed. 12 in-scope URL(s) were queued but not re
     fn no_surface_record_means_no_such_section() {
         let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
         assert!(!out.contains("How much of the application was reached"));
+    }
+
+    fn comparison(resolved: Vec<Finding>, new: Vec<Finding>, open: Vec<Finding>) -> ReportContext {
+        let mut c = ctx();
+        c.comparison = Some(crate::reporting::delta::ScanDelta {
+            previous_reference: "SV-20260801-0900".into(),
+            previous_completed_at: Utc::now() - chrono::Duration::days(30),
+            newly_found: new,
+            resolved,
+            still_open: open,
+        });
+        c
+    }
+
+    /// Without this the reader has to diff two PDFs by hand, which is how a
+    /// regression survives a quarter.
+    #[test]
+    fn remediation_progress_states_what_closed_and_what_appeared() {
+        let c = comparison(
+            vec![finding("Directory listing enabled", Severity::Low, 3.0)],
+            vec![finding("Leaked credential", Severity::Critical, 9.4)],
+            vec![finding("Missing CSP", Severity::Medium, 5.3)],
+        );
+        let out = render(&c, &[finding("Missing CSP", Severity::Medium, 5.3)], None);
+
+        assert!(out.contains("Remediation Progress"));
+        assert!(out.contains("SV-20260801-0900"), "the baseline must be named");
+        assert!(out.contains("Confirmed closed"));
+        assert!(out.contains("Directory listing enabled"));
+        assert!(out.contains("Appeared since the previous assessment"));
+        assert!(out.contains("Leaked credential"));
+    }
+
+    /// Closing findings while introducing a critical is not progress, and the
+    /// verdict must not read as though it were.
+    #[test]
+    fn the_verdict_does_not_congratulate_on_volume_alone() {
+        let c = comparison(
+            (0..5).map(|i| finding(&format!("Old {i}"), Severity::Low, 2.0)).collect(),
+            vec![finding("RCE", Severity::Critical, 9.8)],
+            vec![],
+        );
+        let out = render(&c, &[], None);
+        assert!(out.contains("high-impact finding"), "the critical must lead the verdict");
+        assert!(out.contains("that is the result that matters"));
+    }
+
+    /// A fix is confirmed by observation, which is why marking one Remediated
+    /// by hand does not suppress the re-test.
+    #[test]
+    fn the_closed_list_explains_why_it_is_evidence() {
+        let c = comparison(vec![finding("Fixed thing", Severity::High, 7.0)], vec![], vec![]);
+        let out = render(&c, &[], None);
+        assert!(out.contains("only place in the report that evidences remediation"));
+        assert!(out.contains("re-tested rather than taken at its word"));
+    }
+
+    /// A first assessment is a different document and must not carry an empty
+    /// comparison section.
+    #[test]
+    fn a_first_assessment_has_no_progress_section() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(!out.contains("Remediation Progress"));
     }
 
     #[test]

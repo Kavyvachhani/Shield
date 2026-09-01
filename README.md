@@ -91,6 +91,22 @@ a single priority ranking, and reports written for the two audiences that actual
   reproduction, validation confidence, fix and verification. Also exports Markdown,
   SARIF 2.1.0 and JSON.
 
+### Re-testing
+
+A second assessment of the same target compares itself against the previous one and reports
+what closed, what appeared, and what is still open. Findings are matched across assessments by
+location and classification — the same rule the exception register uses — rather than by any
+identifier the scan generated, so a weakness carried from one report to the next is genuinely
+the same issue.
+
+The **Confirmed closed** list is the only place in either deliverable that evidences remediation
+working, and it is why marking a finding `Remediated` by hand deliberately does *not* suppress
+the re-test: a fix is confirmed by the finding failing to reappear, not by a status somebody set.
+
+The verdict refuses to congratulate on volume. Closing nine low findings while introducing one
+critical is not progress, and a report that reads it as progress misleads the person who
+authorised the work.
+
 ### How an exception changes a report
 
 Accepting a risk does not delete it. It moves out of the finding counts, the posture

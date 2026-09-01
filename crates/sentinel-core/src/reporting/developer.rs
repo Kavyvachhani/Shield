@@ -44,6 +44,7 @@ pub fn render(
   <div class="banner">{classification} — technical distribution only</div>
   {header}
   {triage_guide}
+  {delta}
   {rollup}
   {index}
   {surface}
@@ -61,6 +62,7 @@ pub fn render(
         extra = extra_stylesheet(),
         header = header(ctx, &counts),
         triage_guide = triage_guide(&split),
+        delta = delta_note(ctx),
         rollup = owasp_rollup(&split.active),
         index = index_table(&split.active),
         surface = surface_section(&split),
@@ -522,6 +524,69 @@ fn metric_meaning(metric: &str, value: &str) -> Option<(&'static str, &'static s
 
         _ => return None,
     })
+}
+
+/// What moved since the last run, stated before the queue.
+///
+/// A developer opening this report after a remediation sprint wants to know
+/// which of their fixes were confirmed and what appeared, and neither is
+/// visible from a list of everything currently wrong.
+fn delta_note(ctx: &ReportContext) -> String {
+    let Some(delta) = ctx.comparison.as_ref() else {
+        return String::new();
+    };
+
+    let new_items = if delta.newly_found.is_empty() {
+        String::new()
+    } else {
+        let rows: String = delta
+            .newly_found
+            .iter()
+            .take(20)
+            .map(|f| {
+                format!(
+                    r##"<tr>
+  <td><span class="pill" style="background:{colour}">{severity}</span></td>
+  <td>{title}</td>
+  <td class="loc small">{component}</td>
+</tr>"##,
+                    colour = charts::severity_color(&f.severity),
+                    severity = charts::severity_name(&f.severity),
+                    title = html(&f.title),
+                    component = html(&truncate(&f.affected_component, 70)),
+                )
+            })
+            .collect();
+        format!(
+            r##"<h3>New since {reference}</h3>
+<table class="index"><thead><tr>
+  <th style="width:14%">Severity</th><th style="width:46%">Finding</th><th style="width:40%">Location</th>
+</tr></thead><tbody>{rows}</tbody></table>"##,
+            reference = html(&delta.previous_reference),
+        )
+    };
+
+    format!(
+        r##"<h2>Changes Since the Last Assessment</h2>
+<p>{verdict}</p>
+<div class="grid grid-4">
+  <div class="kpi"><div class="n" style="color:#16a34a">{closed}</div><div class="l">Closed</div></div>
+  <div class="kpi"><div class="n" style="color:#b91c1c">{new}</div><div class="l">New</div></div>
+  <div class="kpi"><div class="n" style="color:#ca8a04">{open}</div><div class="l">Still open</div></div>
+  <div class="kpi"><div class="n" style="color:#ea580c">{high}</div><div class="l">Open crit/high</div></div>
+</div>
+<p class="small muted">Matched by location and classification rather than by finding id, which is
+regenerated every scan. A fix is confirmed by the finding disappearing here — marking one
+<code>Remediated</code> by hand never suppresses the re-test, so this column is evidence rather than
+a status someone set.</p>
+{new_items}"##,
+        verdict = html(&delta.verdict()),
+        closed = delta.resolved.len(),
+        new = delta.newly_found.len(),
+        open = delta.still_open.len(),
+        high = delta.still_open_high_impact(),
+        new_items = new_items,
+    )
 }
 
 /// Where the Top 10 rollup sits in the technical document.
@@ -1387,6 +1452,34 @@ mod tests {
         // The point of the section: several tickets, one root cause.
         assert!(out.contains("usually means"));
         assert!(out.contains("Response headers, cookie attributes"), "developer focus must be shown");
+    }
+
+    #[test]
+    fn the_delta_note_comes_before_the_queue_it_reframes() {
+        let mut c = ctx();
+        c.comparison = Some(crate::reporting::delta::ScanDelta {
+            previous_reference: "SV-PREV".into(),
+            previous_completed_at: Utc::now() - chrono::Duration::days(14),
+            newly_found: vec![finding("New XSS", Severity::High, 7.8)],
+            resolved: vec![finding("Old header gap", Severity::Low, 2.0)],
+            still_open: vec![finding("Missing CSP", Severity::Medium, 5.3)],
+        });
+        let out = render(&c, &[finding("Missing CSP", Severity::Medium, 5.3)], None);
+
+        assert!(out.contains("Changes Since the Last Assessment"));
+        assert!(out.contains("New since SV-PREV"));
+        assert!(out.contains("New XSS"));
+        assert!(
+            out.find("Changes Since the Last Assessment") < out.find("Findings Index"),
+            "the delta reframes the queue, so it comes first"
+        );
+        assert!(out.contains("evidence rather than\na status someone set"));
+    }
+
+    #[test]
+    fn a_first_assessment_carries_no_delta_note() {
+        let out = render(&ctx(), &[finding("XSS", Severity::High, 8.0)], None);
+        assert!(!out.contains("Changes Since the Last Assessment"));
     }
 
     #[test]

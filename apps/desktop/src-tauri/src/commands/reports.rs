@@ -59,7 +59,7 @@ pub async fn generate_report(
 
     let findings = reportable_findings(&input.scan_id, &state).await;
 
-    let ctx = build_context(&input, &state).await;
+    let ctx = build_context(&input, &findings, &state).await;
     let coverage = build_coverage(&input.scan_id, &findings, &state).await;
 
     let (content, content_type, extension) = match input.report_type.as_str() {
@@ -396,7 +396,32 @@ fn select_reportable<'a>(
         .collect()
 }
 
-async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>) -> ReportContext {
+/// The most recent completed scan of the same target, before this one.
+///
+/// Ordered by start time rather than by completion, because a run that was
+/// cancelled or crashed has no completion time and must not be picked as the
+/// baseline — comparing against a half-finished scan would report every finding
+/// it never reached as newly appeared.
+async fn previous_completed_run(
+    current: &crate::state::ScanRunRecord,
+    current_id: &str,
+    state: &State<'_, AppState>,
+) -> Option<crate::state::ScanRunRecord> {
+    let runs = state.scan_runs.read().await;
+    runs.values()
+        .filter(|r| r.target_id == current.target_id)
+        .filter(|r| r.id != current_id)
+        .filter(|r| r.status == crate::state::ScanRunStatus::Completed)
+        .filter(|r| r.started_at < current.started_at)
+        .max_by_key(|r| r.started_at)
+        .cloned()
+}
+
+async fn build_context(
+    input: &GenerateReportInput,
+    findings: &[Finding],
+    state: &State<'_, AppState>,
+) -> ReportContext {
     let run = state.scan_runs.read().await.get(&input.scan_id).cloned();
 
     let target_url = input
@@ -438,6 +463,23 @@ async fn build_context(input: &GenerateReportInput, state: &State<'_, AppState>)
                 .cloned()
                 .collect()
         };
+    }
+
+    // Compare against the previous completed assessment of the same target.
+    //
+    // Both sides use the reportable set, so a false positive dismissed between
+    // the two runs does not read as remediation — the report would be claiming
+    // credit for work nobody did.
+    if let Some(run) = &run {
+        if let Some(previous) = previous_completed_run(run, &input.scan_id, state).await {
+            let previous_findings = reportable_findings(&previous.id, state).await;
+            ctx.comparison = Some(sentinel_core::reporting::delta::ScanDelta::compute(
+                &previous_findings,
+                findings,
+                format!("SV-{}", previous.started_at.format("%Y%m%d-%H%M")),
+                previous.completed_at.unwrap_or(previous.started_at),
+            ));
+        }
     }
 
     if let Some(run) = &run {

@@ -18,6 +18,7 @@
 pub mod charts;
 pub mod client;
 pub mod developer;
+pub mod delta;
 pub mod escape;
 pub mod owasp;
 
@@ -61,6 +62,10 @@ pub struct ReportContext {
     /// Report revision, e.g. "1.0". Shown in document control.
     #[serde(default = "default_revision")]
     pub revision: String,
+    /// Comparison against the previous assessment of this target, when there
+    /// is one. Absent on a first assessment, which is a different document.
+    #[serde(default)]
+    pub comparison: Option<delta::ScanDelta>,
 }
 
 fn default_classification() -> String {
@@ -94,6 +99,7 @@ impl ReportContext {
             classification: default_classification(),
             reviewed_by: None,
             revision: default_revision(),
+            comparison: None,
         }
     }
 
