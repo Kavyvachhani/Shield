@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-mcp"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 description = "Model Context Protocol (MCP) Server interface for SentinelVAPT local desktop workbench"
 
