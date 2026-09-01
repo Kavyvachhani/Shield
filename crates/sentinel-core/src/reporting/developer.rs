@@ -12,6 +12,8 @@ use super::{
 };
 use crate::checklist::{CheckStatus, CoverageReport};
 use crate::exceptions::{self, ExceptionRecord};
+use crate::reporting::owasp;
+use crate::scoring::Cvss4Vector;
 use crate::models::finding::{Finding, FindingStatus};
 use crate::scoring::priority::PriorityScoringEngine;
 use chrono::Utc;
@@ -42,6 +44,7 @@ pub fn render(
   <div class="banner">{classification} — technical distribution only</div>
   {header}
   {triage_guide}
+  {rollup}
   {index}
   {untested}
   {details}
@@ -57,6 +60,7 @@ pub fn render(
         extra = extra_stylesheet(),
         header = header(ctx, &counts),
         triage_guide = triage_guide(&split),
+        rollup = owasp_rollup(&split.active),
         index = index_table(&split.active),
         untested = untested_section(coverage),
         details = detail_sections(&split.active),
@@ -109,6 +113,18 @@ table.index tr{page-break-inside:avoid;break-inside:avoid}
 .validate .body p:last-child{margin-bottom:0}
 .dismiss{border-left:4px solid #64748b;background:#f8fafc;padding:11px 14px;
   border-radius:0 7px 7px 0;margin:10px 0;font-size:12.5px}
+
+/* CVSS metric breakdown: the vector spelled out, so a reader can challenge the
+   score instead of taking it on faith. */
+table.cvss{font-size:11.5px;margin:6px 0 2px}
+table.cvss td,table.cvss th{padding:5px 9px}
+table.cvss .m{font-family:'Cascadia Mono',Consolas,monospace;font-weight:700;
+  white-space:nowrap;width:52px}
+table.cvss .v{font-weight:600;white-space:nowrap;width:120px}
+/* Evidence transcripts read as a terminal session, not as prose. */
+pre.transcript{background:#0b1220;border-left:3px solid #38bdf8}
+pre.fix-code{background:#052e1a;border-left:3px solid #16a34a;color:#d1fae5}
+.owasp-row td{vertical-align:middle}
 @media print{.validate,.dismiss{page-break-inside:avoid}}
 "##
 }
@@ -383,6 +399,179 @@ returns to the queue on the next scan.</p>
     )
 }
 
+/// The CVSS vector, spelled out metric by metric.
+///
+/// A vector string is a checksum, not an argument. `PR:N/UI:N` is the
+/// difference between "anyone on the internet" and "an authenticated user who
+/// also has to be tricked into clicking", and a reader who cannot see that has
+/// no basis on which to disagree with the score — which means the score is
+/// being taken on faith rather than reviewed.
+fn cvss_breakdown(f: &Finding) -> String {
+    let Some(cvss) = f.cvss4.as_ref() else { return String::new() };
+    if cvss.vector_string.trim().is_empty() {
+        return String::new();
+    }
+
+    // A vector this engine cannot parse still has to reach the reader. It may
+    // have come from another tool, or use a metric added after this build; in
+    // either case printing it raw loses nothing, whereas returning early would
+    // silently drop the one piece of evidence behind the score.
+    let Ok(vector) = Cvss4Vector::parse(&cvss.vector_string) else {
+        return format!(
+            r##"<div class="section-label">CVSS 4.0 vector</div><pre>{vector}</pre>
+<p class="small muted">Base score <strong>{score:.1}</strong> ({label}), as reported by the engine
+that raised this finding. The vector could not be broken down here — recompute it with any CVSS 4.0
+calculator to check the score.</p>"##,
+            vector = html(&cvss.vector_string),
+            score = cvss.base_score,
+            label = html(&cvss.severity_label),
+        );
+    };
+
+    let rows: String = vector
+        .present()
+        .into_iter()
+        .filter_map(|(metric, value)| {
+            let (name, meaning) = metric_meaning(metric, value)?;
+            Some(format!(
+                r##"<tr><td class="m">{metric}:{value}</td><td class="v">{name}</td><td>{meaning}</td></tr>"##,
+                metric = html(metric),
+                value = html(value),
+                name = html(name),
+                meaning = html(meaning),
+            ))
+        })
+        .collect();
+
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        r##"<div class="section-label">CVSS 4.0 — how this score is reached</div>
+<pre>{vector}</pre>
+<table class="cvss">
+  <thead><tr><th>Metric</th><th>Value</th><th>What it means here</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+<p class="small muted">Base score <strong>{score:.1}</strong> ({label}). Recompute it from the
+vector above with any CVSS 4.0 calculator — this figure is derived from the vector, never
+declared alongside it.</p>"##,
+        vector = html(&cvss.vector_string),
+        rows = rows,
+        score = cvss.base_score,
+        label = html(&cvss.severity_label),
+    )
+}
+
+/// Plain-language meaning of one CVSS 4.0 metric value.
+///
+/// Only the base and threat metrics are described. An environmental metric is
+/// the client's own judgement about their deployment, and this engine has no
+/// basis on which to narrate it.
+fn metric_meaning(metric: &str, value: &str) -> Option<(&'static str, &'static str)> {
+    Some(match (metric, value) {
+        ("AV", "N") => ("Attack vector", "Reachable across the network — no local access needed."),
+        ("AV", "A") => ("Attack vector", "Requires access to the adjacent network."),
+        ("AV", "L") => ("Attack vector", "Requires local access to the host."),
+        ("AV", "P") => ("Attack vector", "Requires physical access to the device."),
+
+        ("AC", "L") => ("Attack complexity", "No special conditions — it works reliably."),
+        ("AC", "H") => ("Attack complexity", "The attacker must defeat a mitigation first."),
+
+        ("AT", "N") => ("Attack requirements", "No preconditions on the target's state."),
+        ("AT", "P") => ("Attack requirements", "Depends on a condition the attacker does not control."),
+
+        ("PR", "N") => ("Privileges required", "None — an anonymous visitor can do this."),
+        ("PR", "L") => ("Privileges required", "An ordinary authenticated account is enough."),
+        ("PR", "H") => ("Privileges required", "Administrative privileges are needed."),
+
+        ("UI", "N") => ("User interaction", "None — no victim has to do anything."),
+        ("UI", "P") => ("User interaction", "A user must perform an ordinary action, such as following a link."),
+        ("UI", "A") => ("User interaction", "A user must be induced into a deliberate, unusual action."),
+
+        ("VC", "H") => ("Confidentiality impact", "Total loss of confidentiality for the affected component."),
+        ("VC", "L") => ("Confidentiality impact", "Some information is disclosed, but not everything."),
+        ("VC", "N") => ("Confidentiality impact", "No information is disclosed."),
+
+        ("VI", "H") => ("Integrity impact", "The attacker can modify any data the component holds."),
+        ("VI", "L") => ("Integrity impact", "Limited modification, with the attacker unable to choose the outcome."),
+        ("VI", "N") => ("Integrity impact", "No data can be modified."),
+
+        ("VA", "H") => ("Availability impact", "The component can be made fully unavailable."),
+        ("VA", "L") => ("Availability impact", "Performance is degraded but the service continues."),
+        ("VA", "N") => ("Availability impact", "Availability is unaffected."),
+
+        ("SC", "H") => ("Subsequent confidentiality", "Total disclosure in a system beyond the vulnerable one."),
+        ("SC", "L") => ("Subsequent confidentiality", "Partial disclosure beyond the vulnerable component."),
+        ("SC", "N") => ("Subsequent confidentiality", "No impact beyond the vulnerable component."),
+
+        ("SI", "H") => ("Subsequent integrity", "Data in another system can be modified at will."),
+        ("SI", "L") => ("Subsequent integrity", "Limited modification beyond the vulnerable component."),
+        ("SI", "N") => ("Subsequent integrity", "No integrity impact beyond the vulnerable component."),
+
+        ("SA", "H") => ("Subsequent availability", "Another system can be made fully unavailable."),
+        ("SA", "L") => ("Subsequent availability", "Another system is degraded."),
+        ("SA", "N") => ("Subsequent availability", "No availability impact beyond the vulnerable component."),
+
+        ("E", "A") => ("Exploit maturity", "Attacked in the wild, or automated exploitation exists."),
+        ("E", "P") => ("Exploit maturity", "A proof-of-concept exploit is public."),
+        ("E", "U") => ("Exploit maturity", "No public exploit is known."),
+
+        _ => return None,
+    })
+}
+
+/// Where the Top 10 rollup sits in the technical document.
+///
+/// The point here is different from the client report's version. Twenty tickets
+/// that turn out to be one missing header block is one piece of work, not
+/// twenty, and nothing else in the document makes that visible.
+fn owasp_rollup(sorted: &[Finding]) -> String {
+    let rows = owasp::rollup(sorted);
+    if rows.iter().all(|r| r.total == 0) {
+        return String::new();
+    }
+
+    let body: String = rows
+        .iter()
+        .map(|r| {
+            let examples = if r.examples.is_empty() {
+                r##"<span class="muted">—</span>"##.to_string()
+            } else {
+                html(&r.examples.join("; "))
+            };
+            let focus = owasp::category(&r.code)
+                .map(|c| html(c.developer_focus))
+                .unwrap_or_default();
+            format!(
+                r##"<tr class="owasp-row">
+  <td style="white-space:nowrap"><strong>{code}</strong><div class="small muted">{name}</div></td>
+  <td style="text-align:center;font-weight:700;color:{colour}">{total}</td>
+  <td class="small">{examples}<div class="muted" style="margin-top:4px">{focus}</div></td>
+</tr>"##,
+                code = html(&r.code),
+                name = html(&r.name),
+                colour = r.status_color(),
+                total = r.total,
+                examples = examples,
+                focus = focus,
+            )
+        })
+        .collect();
+
+    format!(
+        r##"<h2>Findings by OWASP Top 10:2025</h2>
+<p>The same findings grouped by root cause. Several tickets landing in one row usually means
+one fix, applied once, closes all of them — a missing header block or an unparameterised query
+pattern rather than a list of unrelated defects.</p>
+<table>
+  <thead><tr><th style="width:210px">Category</th><th style="width:70px">Findings</th><th>What landed here, and where to look</th></tr></thead>
+  <tbody>{body}</tbody>
+</table>"##
+    )
+}
+
 fn header(ctx: &ReportContext, counts: &SeverityCounts) -> String {
     let logo = ctx
         .logo_data_uri
@@ -606,19 +795,9 @@ fn detail_section(n: usize, f: &Finding) -> String {
     .map(|v| format!(r##"<span class="tag">{}</span>"##, html(v)))
     .collect();
 
-    let vector = f
-        .cvss4
-        .as_ref()
-        .map(|c| c.vector_string.clone())
-        .filter(|v| !v.trim().is_empty());
-    let vector_html = vector
-        .map(|v| {
-            format!(
-                r##"<div class="section-label">CVSS 4.0 vector</div><pre>{}</pre>"##,
-                html(&v)
-            )
-        })
-        .unwrap_or_default();
+    // The vector spelled out rather than printed as an opaque string: a score
+    // nobody can check is a number, not an argument.
+    let vector_html = cvss_breakdown(f);
 
     let rationale = if f.priority_rationale.trim().is_empty() {
         PriorityScoringEngine::explain(f)
@@ -644,18 +823,37 @@ fn detail_section(n: usize, f: &Finding) -> String {
             .evidences
             .iter()
             .map(|e| {
+                // An HTTP exchange reads as a transcript, not as prose, and the
+                // styling should say which one the reader is looking at.
+                let is_transcript = matches!(
+                    e.evidence_type.as_str(),
+                    "http_request" | "http_response" | "http_exchange" | "tls_handshake"
+                );
+                let class = if is_transcript { " class=\"transcript\"" } else { "" };
+                let integrity = if e.hash.trim().is_empty() {
+                    r##"<span class="muted">derived from the findings above; no separate artefact</span>"##.to_string()
+                } else {
+                    format!("SHA-256 {}", html(&truncate(&e.hash, 32)))
+                };
                 format!(
                     r##"<div class="small muted" style="margin-top:8px">{title} <span class="tag">{etype}</span></div>
-<pre>{content}</pre>
-<div class="small muted">SHA-256 {hash}</div>"##,
+<pre{class}>{content}</pre>
+<div class="small muted">{integrity}</div>"##,
                     title = html(&e.title),
                     etype = html(&e.evidence_type),
+                    class = class,
                     content = html(&e.content),
-                    hash = html(&truncate(&e.hash, 24)),
+                    integrity = integrity,
                 )
             })
             .collect();
-        format!(r##"<div class="section-label">Evidence (sanitized)</div>{blocks}"##)
+        format!(
+            r##"<div class="section-label">Evidence (sanitized)</div>
+<p class="small muted">Captured at the time of testing and hashed on capture, so any later
+alteration is detectable. Credentials, session cookies and authorization headers are removed
+before an artefact is stored — a report is a document that gets emailed around.</p>
+{blocks}"##
+        )
     };
 
     let references = if f.references.is_empty() {
@@ -755,7 +953,7 @@ fn detail_section(n: usize, f: &Finding) -> String {
         vector_html = vector_html,
         steps = steps,
         evidence = evidence,
-        remediation = html_multiline(&f.remediation),
+        remediation = remediation_html(&f.remediation),
         references = references,
         tools = html(&f.source_tools.join(", ")),
         window = html(remediation_window(&f.severity)),
@@ -843,6 +1041,50 @@ pub fn render_markdown(ctx: &ReportContext, findings: &[Finding]) -> String {
         out.push_str("---\n\n");
     }
 
+    out
+}
+
+/// Render remediation prose, turning fenced blocks into real code blocks.
+///
+/// Checks that can offer an exact configuration line do so as a ```-fenced
+/// block. Escaping it as prose would leave the developer retyping a directive
+/// from a wrapped paragraph, which is how a `Content-Security-Policy` ends up
+/// deployed with a typo in it.
+fn remediation_html(remediation: &str) -> String {
+    if !remediation.contains("```") {
+        return html_multiline(remediation);
+    }
+
+    let mut out = String::new();
+    let mut in_code = false;
+    let mut buffer: Vec<&str> = Vec::new();
+
+    let flush = |out: &mut String, buffer: &mut Vec<&str>, in_code: bool| {
+        if buffer.is_empty() {
+            return;
+        }
+        let text = buffer.join("\n");
+        if in_code {
+            out.push_str(&format!(
+                r##"<pre class="fix-code">{}</pre>"##,
+                html(text.trim_matches('\n'))
+            ));
+        } else if !text.trim().is_empty() {
+            out.push_str(&format!("<div>{}</div>", html_multiline(text.trim())));
+        }
+        buffer.clear();
+    };
+
+    for line in remediation.lines() {
+        if line.trim_start().starts_with("```") {
+            flush(&mut out, &mut buffer, in_code);
+            in_code = !in_code;
+            continue;
+        }
+        buffer.push(line);
+    }
+    // An unterminated fence is a content bug, not a reason to lose the text.
+    flush(&mut out, &mut buffer, in_code);
     out
 }
 
@@ -1057,6 +1299,129 @@ mod tests {
         let mut f = finding("Unproven", Severity::Medium, 5.0);
         f.evidences.clear();
         assert!(validation_of(&f).basis.contains("No evidence artefact"));
+    }
+
+    // ── Technical depth ─────────────────────────────────────────────────────
+
+    /// A vector string is a checksum, not an argument. A reader who cannot see
+    /// that PR:N means "anyone on the internet" has no basis on which to
+    /// disagree with the score.
+    #[test]
+    fn the_cvss_vector_is_spelled_out_metric_by_metric() {
+        let mut f = finding("SQL injection", Severity::Critical, 9.4);
+        f.cvss4 = Some(crate::models::finding::CVSS4Data {
+            vector_string: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N".into(),
+            base_score: 9.3,
+            severity_label: "Critical".into(),
+        });
+        let out = render(&ctx(), &[f], None);
+
+        assert!(out.contains("how this score is reached"));
+        assert!(out.contains("Privileges required"));
+        assert!(out.contains("None — an anonymous visitor can do this."));
+        assert!(out.contains("Total loss of confidentiality"));
+        assert!(out.contains("Recompute it from the"), "the reader must be told they can check it");
+    }
+
+    /// A vector from another tool, or using a metric added after this build,
+    /// must still reach the reader rather than being silently dropped.
+    #[test]
+    fn an_unparseable_vector_is_still_printed_rather_than_discarded() {
+        let mut f = finding("From another engine", Severity::High, 7.0);
+        f.cvss4 = Some(crate::models::finding::CVSS4Data {
+            vector_string: "CVSS:4.0/AV:N/AC:L/ZZ:Q".into(),
+            base_score: 7.0,
+            severity_label: "High".into(),
+        });
+        let out = render(&ctx(), &[f], None);
+        assert!(out.contains("CVSS:4.0/AV:N/AC:L/ZZ:Q"));
+        assert!(out.contains("could not be broken down here"));
+    }
+
+    #[test]
+    fn findings_are_rolled_up_by_owasp_category() {
+        let mut a = finding("Missing CSP", Severity::Medium, 5.3);
+        a.owasp_2025 = Some("A02:2025-Security Misconfiguration".into());
+        let mut b = finding("Missing HSTS", Severity::Medium, 5.0);
+        b.owasp_2025 = Some("A02:2025-Security Misconfiguration".into());
+
+        let out = render(&ctx(), &[a, b], None);
+        assert!(out.contains("Findings by OWASP Top 10:2025"));
+        assert!(out.contains("Security Misconfiguration"));
+        // The point of the section: several tickets, one root cause.
+        assert!(out.contains("usually means"));
+        assert!(out.contains("Response headers, cookie attributes"), "developer focus must be shown");
+    }
+
+    #[test]
+    fn the_rollup_is_omitted_when_there_is_nothing_to_roll_up() {
+        let out = render(&ctx(), &[], None);
+        assert!(!out.contains("Findings by OWASP Top 10"));
+    }
+
+    /// A directive retyped out of a wrapped paragraph is how a CSP ends up
+    /// deployed with a typo in it.
+    #[test]
+    fn fenced_remediation_renders_as_a_code_block() {
+        let mut f = finding("Missing header", Severity::Medium, 5.0);
+        f.remediation = "Set the header at the edge:\n\n```\nadd_header X-Frame-Options DENY;\n```\n\nThen redeploy.".into();
+        let out = render(&ctx(), &[f], None);
+
+        assert!(out.contains(r#"<pre class="fix-code">"#), "the snippet must be a code block");
+        assert!(out.contains("add_header X-Frame-Options DENY;"));
+        assert!(out.contains("Then redeploy."), "prose either side of the fence must survive");
+    }
+
+    /// An unterminated fence is a content bug; losing the text would turn it
+    /// into a missing remediation.
+    #[test]
+    fn an_unterminated_fence_does_not_swallow_the_remediation() {
+        let mut f = finding("Odd", Severity::Low, 2.0);
+        f.remediation = "Do this:\n```\nsome config".into();
+        let out = render(&ctx(), &[f], None);
+        assert!(out.contains("some config"));
+        assert!(out.contains("Do this:"));
+    }
+
+    #[test]
+    fn remediation_without_a_fence_is_unchanged() {
+        let out = render(&ctx(), &[finding("Plain", Severity::Low, 2.0)], None);
+        assert!(out.contains("Fix it properly."));
+        // The class name is always in the stylesheet; what must not appear is
+        // an element using it.
+        assert!(!out.contains(r#"<pre class="fix-code">"#));
+    }
+
+    #[test]
+    fn http_evidence_is_presented_as_a_transcript_with_its_integrity_note() {
+        let mut f = finding("Missing header", Severity::Medium, 5.0);
+        f.evidences = vec![crate::models::finding::Evidence {
+            evidence_type: "http_response".into(),
+            title: "Response headers".into(),
+            content: "HTTP/1.1 200 OK\nServer: nginx".into(),
+            hash: "abc123def456".into(),
+        }];
+        let out = render(&ctx(), &[f], None);
+
+        assert!(out.contains(r#"<pre class="transcript">"#));
+        assert!(out.contains("SHA-256 abc123def456"));
+        assert!(out.contains("hashed on capture"));
+    }
+
+    /// An aggregated finding's instance list has no artefact hash of its own,
+    /// and claiming one would be a lie about the evidence chain.
+    #[test]
+    fn evidence_with_no_hash_says_so_rather_than_printing_an_empty_one() {
+        let mut f = finding("Missing header", Severity::Medium, 5.0);
+        f.evidences = vec![crate::models::finding::Evidence {
+            evidence_type: "affected_locations".into(),
+            title: "Affected pages (3)".into(),
+            content: "/a\n/b\n/c".into(),
+            hash: String::new(),
+        }];
+        let out = render(&ctx(), &[f], None);
+        assert!(out.contains("no separate artefact"));
+        assert!(!out.contains("SHA-256 </div>"));
     }
 
     #[test]

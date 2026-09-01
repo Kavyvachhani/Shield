@@ -116,7 +116,10 @@ impl NativeFinding {
             affected_component: component.to_string(),
             evidences,
             repro_steps,
-            remediation: spec.remediation.to_string(),
+            remediation: match remediation_snippet(spec.id) {
+                Some(snippet) => format!("{}\n\n```\n{}\n```", spec.remediation, snippet),
+                None => spec.remediation.to_string(),
+            },
             references: spec.references.iter().map(|r| r.to_string()).collect(),
             status: FindingStatus::Open,
             source_tools: vec!["Sentinel Native".to_string()],
@@ -197,6 +200,126 @@ pub fn fp_confidence(spec_id: &str) -> f64 {
     }
 }
 
+/// A copy-pasteable fix for the checks where one exists.
+///
+/// Most remediation advice in this engine is a paragraph, which is right for a
+/// weakness whose fix depends on the application. But for a missing response
+/// header the fix *is* a line of configuration, and making a developer retype
+/// a directive out of a wrapped paragraph is how a Content-Security-Policy ends
+/// up deployed with a typo in it.
+///
+/// Returned as a fenced block appended to the remediation text; the developer
+/// report renders fences as code blocks and leaves the prose either side
+/// intact.
+fn remediation_snippet(spec_id: &str) -> Option<&'static str> {
+    Some(match spec_id {
+        "NATIVE-HSTS-MISSING" | "NATIVE-HSTS-WEAK" => {
+            "# nginx\n\
+             add_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;\n\n\
+             # Apache\n\
+             Header always set Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\"\n\n\
+             # Express\n\
+             app.use(helmet.hsts({ maxAge: 63072000, includeSubDomains: true, preload: true }));"
+        }
+        "NATIVE-CSP-MISSING" | "NATIVE-CSP-WEAK" => {
+            "# A nonce-based policy. Generate `$nonce` per response and put the\n\
+             # same value on every inline <script nonce=\"...\">.\n\
+             Content-Security-Policy:\n\
+             \x20 default-src 'self';\n\
+             \x20 script-src 'self' 'nonce-$nonce' 'strict-dynamic';\n\
+             \x20 object-src 'none';\n\
+             \x20 base-uri 'self';\n\
+             \x20 frame-ancestors 'none';\n\
+             \x20 form-action 'self';\n\
+             \x20 require-trusted-types-for 'script'"
+        }
+        "NATIVE-CLICKJACKING" => {
+            "# frame-ancestors supersedes X-Frame-Options where both are understood.\n\
+             Content-Security-Policy: frame-ancestors 'none'\n\
+             X-Frame-Options: DENY"
+        }
+        "NATIVE-XCTO-MISSING" => "X-Content-Type-Options: nosniff",
+        "NATIVE-REFERRER-POLICY" => "Referrer-Policy: strict-origin-when-cross-origin",
+        "NATIVE-PERMISSIONS-POLICY" => {
+            "# Deny by default; add back only what the application uses.\n\
+             Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(),\n\
+             \x20 magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+        }
+        "NATIVE-COOP-MISSING" => "Cross-Origin-Opener-Policy: same-origin",
+        "NATIVE-CORP-MISSING" => "Cross-Origin-Resource-Policy: same-origin",
+        "NATIVE-XSS-FILTER-ENABLED" => {
+            "# Disable the legacy auditor explicitly and rely on CSP instead.\n\
+             X-XSS-Protection: 0"
+        }
+        "NATIVE-COOKIE-INSECURE" | "NATIVE-COOKIE-HTTPONLY" | "NATIVE-COOKIE-SAMESITE"
+        | "NATIVE-COOKIE-PREFIX" => {
+            "# __Host- is enforced by the browser: HTTPS only, Path=/, no Domain,\n\
+             # so a sibling subdomain cannot overwrite the session cookie.\n\
+             Set-Cookie: __Host-session=<value>; Secure; HttpOnly; SameSite=Lax; Path=/\n\n\
+             // Express\n\
+             res.cookie('__Host-session', value, {\n\
+             \x20 secure: true, httpOnly: true, sameSite: 'lax', path: '/',\n\
+             });"
+        }
+        "NATIVE-CACHE-CONTROL" => {
+            "# On any response that carries session state or personal data.\n\
+             Cache-Control: no-store\n\
+             Pragma: no-cache"
+        }
+        "NATIVE-BANNER-DISCLOSURE" => {
+            "# nginx\n\
+             server_tokens off;\n\n\
+             # Express\n\
+             app.disable('x-powered-by');\n\n\
+             # Apache\n\
+             ServerTokens Prod\n\
+             ServerSignature Off"
+        }
+        "NATIVE-DIRECTORY-LISTING" => {
+            "# nginx\n\
+             autoindex off;\n\n\
+             # Apache\n\
+             Options -Indexes"
+        }
+        "NATIVE-SRI-MISSING" => {
+            "<!-- Generate the hash with:\n\
+             \x20    openssl dgst -sha384 -binary lib.js | openssl base64 -A  -->\n\
+             <script src=\"https://cdn.example.com/lib.js\"\n\
+             \x20       integrity=\"sha384-<hash>\"\n\
+             \x20       crossorigin=\"anonymous\"></script>"
+        }
+        "NATIVE-TABNABBING" => "<a href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\">…</a>",
+        "NATIVE-NO-HTTPS" | "NATIVE-NO-HTTPS-REDIRECT" => {
+            "# nginx — redirect every plaintext request before anything else runs.\n\
+             server {\n\
+             \x20 listen 80;\n\
+             \x20 server_name example.com;\n\
+             \x20 return 301 https://$host$request_uri;\n\
+             }"
+        }
+        "NATIVE-CORS-WILDCARD" | "NATIVE-CORS-CREDENTIALED-REFLECTION" | "NATIVE-CORS-NULL-ORIGIN" => {
+            "// Reflecting the Origin header is what makes this exploitable.\n\
+             // Check it against an allow-list and echo only a known value.\n\
+             const ALLOWED = new Set(['https://app.example.com']);\n\
+             const origin = req.get('Origin');\n\
+             if (origin && ALLOWED.has(origin)) {\n\
+             \x20 res.set('Access-Control-Allow-Origin', origin);\n\
+             \x20 res.set('Vary', 'Origin');\n\
+             \x20 res.set('Access-Control-Allow-Credentials', 'true');\n\
+             }"
+        }
+        "NATIVE-DANGEROUS-METHODS" => {
+            "# nginx — allow only the methods the application serves.\n\
+             if ($request_method !~ ^(GET|HEAD|POST|PUT|PATCH|DELETE)$) {\n\
+             \x20 return 405;\n\
+             }\n\n\
+             # Apache — TRACE is never needed and enables cross-site tracing.\n\
+             TraceEnable Off"
+        }
+        _ => return None,
+    })
+}
+
 /// The engine's own note on what its evidence does and does not establish.
 fn triage_note(spec_id: &str) -> &'static str {
     match spec_id {
@@ -271,6 +394,51 @@ mod tests {
         // Computed from the vector above, not declared beside it.
         assert_eq!(f.cvss4.unwrap().base_score, 6.9);
         assert_eq!(f.references.len(), 1);
+    }
+
+    /// A directive retyped out of a wrapped paragraph is how a header ends up
+    /// deployed with a typo in it.
+    #[test]
+    fn header_checks_carry_a_copy_pasteable_fix() {
+        for id in [
+            "NATIVE-HSTS-MISSING",
+            "NATIVE-CSP-MISSING",
+            "NATIVE-XCTO-MISSING",
+            "NATIVE-COOKIE-HTTPONLY",
+            "NATIVE-CORS-WILDCARD",
+        ] {
+            let snippet = remediation_snippet(id)
+                .unwrap_or_else(|| panic!("{id} should offer a concrete fix"));
+            assert!(!snippet.trim().is_empty(), "{id} has an empty snippet");
+        }
+    }
+
+    /// Advice that depends on the application must stay prose — an invented
+    /// snippet would be worse than none.
+    #[test]
+    fn application_specific_checks_offer_no_snippet() {
+        assert!(remediation_snippet("NATIVE-SECRET-IN-CONTENT").is_none());
+        assert!(remediation_snippet("NATIVE-STACK-TRACE").is_none());
+    }
+
+    #[test]
+    fn a_snippet_is_appended_as_a_fenced_block_after_the_prose() {
+        const HSTS: CheckSpec = CheckSpec {
+            id: "NATIVE-XCTO-MISSING",
+            title: "T",
+            cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
+            cwe: "CWE-16",
+            wstg: "WSTG-CONF-02",
+            owasp_2025: "A02:2025-Security Misconfiguration",
+            api_top10: None,
+            description: "d",
+            remediation: "Set the header.",
+            references: &["https://example.test"],
+        };
+        let f = NativeFinding::build(&HSTS, Uuid::new_v4(), Uuid::new_v4(), "https://x.test/", "", vec![], vec![]);
+        assert!(f.remediation.starts_with("Set the header."), "the prose comes first");
+        assert!(f.remediation.contains("```"), "the snippet is fenced");
+        assert!(f.remediation.contains("X-Content-Type-Options: nosniff"));
     }
 
     /// A number that is the same for every check is not a confidence estimate.

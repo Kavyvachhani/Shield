@@ -19,6 +19,7 @@ pub mod charts;
 pub mod client;
 pub mod developer;
 pub mod escape;
+pub mod owasp;
 
 use crate::checklist::CoverageReport;
 use crate::exceptions::ExceptionRecord;

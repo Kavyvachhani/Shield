@@ -221,6 +221,28 @@ impl Cvss4Vector {
     }
 
     /// The CVSS 4.0 base score, 0.0–10.0, rounded to one decimal place.
+    /// The value of one metric, if the vector declares it.
+    ///
+    /// Exposed so the developer report can print the vector metric by metric
+    /// rather than as an opaque string. A reader who cannot see that `PR:N`
+    /// means "no privileges required" has no way to challenge the score, and a
+    /// score nobody can challenge is a number rather than an argument.
+    pub fn get(&self, metric: &str) -> Option<&str> {
+        self.metrics.get(metric).map(String::as_str)
+    }
+
+    /// Every metric present in the vector, in canonical CVSS order.
+    pub fn present(&self) -> Vec<(&str, &str)> {
+        const ORDER: &[&str] = &[
+            "AV", "AC", "AT", "PR", "UI", "VC", "VI", "VA", "SC", "SI", "SA",
+            "E", "CR", "IR", "AR", "S", "AU", "R", "V", "RE", "U",
+        ];
+        ORDER
+            .iter()
+            .filter_map(|m| self.metrics.get(*m).map(|v| (*m, v.as_str())))
+            .collect()
+    }
+
     pub fn score(&self) -> f64 {
         // No impact anywhere scores zero, short-circuiting the interpolation.
         if ["VC", "VI", "VA", "SC", "SI", "SA"].iter().all(|m| self.m(m) == "N") {

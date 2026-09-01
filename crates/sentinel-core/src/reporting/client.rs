@@ -14,6 +14,7 @@ use super::{
 };
 use crate::checklist::{CheckStatus, CoverageReport};
 use crate::exceptions::ExceptionRecord;
+use crate::reporting::owasp;
 use crate::models::finding::{Finding, Severity};
 use crate::scoring::priority::PriorityScoringEngine;
 use chrono::Utc;
@@ -53,6 +54,7 @@ pub fn render(
   {top_risks}
   {accepted}
   {roadmap}
+  {owasp}
   {compliance}
   {methodology}
   {assurance}
@@ -76,6 +78,7 @@ pub fn render(
         top_risks = top_risks(&split.active),
         accepted = accepted_risk_register(ctx, &split),
         roadmap = roadmap(&split.active),
+        owasp = owasp_rollup(&split),
         compliance = compliance(&counts, coverage),
         methodology = methodology(ctx),
         assurance = assurance(ctx, coverage, findings),
@@ -120,6 +123,7 @@ fn contents(coverage: Option<&CoverageReport>, split: &ReportFindings) -> String
         entries.push("Remediation Roadmap");
     }
     entries.extend([
+        "OWASP Top 10:2025 — Where the Findings Sit",
         "Compliance Alignment",
         "Methodology",
         "Assurance, Evidence &amp; Limitations",
@@ -813,6 +817,71 @@ items to confirm the fixes are effective and have not introduced new weaknesses.
     )
 }
 
+/// Where the findings sit against the framework the client's programme tracks.
+///
+/// A list of twenty findings cannot be reconciled with a security programme
+/// that reports against the OWASP Top 10; the same twenty grouped by category
+/// can. Every category is shown, including the ones with nothing against them —
+/// a clean category is a result, and omitting it would turn a picture of
+/// coverage into a list of failures.
+fn owasp_rollup(split: &ReportFindings) -> String {
+    let rows = owasp::rollup(&split.active);
+
+    let body: String = rows
+        .iter()
+        .map(|r| {
+            let meaning = owasp::category(&r.code)
+                .map(|c| html(c.client_meaning))
+                .unwrap_or_default();
+            let count_cell = if r.total == 0 {
+                r##"<span style="color:#16a34a;font-weight:700">None</span>"##.to_string()
+            } else {
+                format!(
+                    r##"<span style="color:{colour};font-weight:700">{total}</span>"##,
+                    colour = r.status_color(),
+                    total = r.total
+                )
+            };
+            format!(
+                r##"<tr>
+  <td style="white-space:nowrap"><strong>{code}</strong> {name}</td>
+  <td style="text-align:center">{count_cell}</td>
+  <td style="white-space:nowrap"><span class="pill" style="background:{colour}">{status}</span></td>
+  <td class="small">{meaning}</td>
+</tr>"##,
+                code = html(&r.code),
+                name = html(&r.name),
+                count_cell = count_cell,
+                colour = r.status_color(),
+                status = r.status_label(),
+                meaning = meaning,
+            )
+        })
+        .collect();
+
+    let clean = rows.iter().filter(|r| r.actionable() == 0).count();
+
+    format!(
+        r##"<h2 class="page-break">OWASP Top 10:2025 — Where the Findings Sit</h2>
+<p>The OWASP Top 10 is the reference list of application security risk categories used across
+the industry. Grouping this assessment's results against it lets the findings be reconciled with
+whatever your security programme already reports on, and shows which categories came back clean.
+<strong>{clean} of the 10 categories carry no actionable finding.</strong></p>
+<table>
+  <thead><tr>
+    <th style="width:270px">Risk category</th>
+    <th style="width:80px">Findings</th>
+    <th style="width:110px">Worst severity</th>
+    <th>What this category covers</th>
+  </tr></thead>
+  <tbody>{body}</tbody>
+</table>
+<p class="small muted">A category with no findings means the checks covering it were exercised and
+came back clean — not that the risk is impossible. Categories that automated testing cannot fully
+answer, such as Insecure Design, are marked <em>Manual review required</em> in the coverage matrix.</p>"##
+    )
+}
+
 fn compliance(counts: &SeverityCounts, coverage: Option<&CoverageReport>) -> String {
     let outstanding = counts.critical + counts.high;
     let (status_text, status_color) = if outstanding > 0 {
@@ -1381,6 +1450,34 @@ mod tests {
         let out = render(&c, &[], None);
         assert!(out.contains("Restricted — prepared for"));
         assert!(!out.contains("Confidential — prepared for"));
+    }
+
+    #[test]
+    fn the_owasp_rollup_shows_every_category_including_the_clean_ones() {
+        let mut f = finding("Missing CSP", Severity::Medium, 5.3);
+        f.owasp_2025 = Some("A02:2025-Security Misconfiguration".into());
+        let out = render(&ctx(), &[f], None);
+
+        assert!(out.contains("OWASP Top 10:2025 — Where the Findings Sit"));
+        for code in ["A01", "A02", "A05", "A10"] {
+            assert!(out.contains(code), "category {code} must be listed even with no findings");
+        }
+        assert!(out.contains("9 of the 10 categories carry no actionable finding"));
+        assert!(out.contains("not that the risk is impossible"), "a clean row must not overclaim");
+    }
+
+    #[test]
+    fn an_accepted_risk_does_not_count_against_its_owasp_category() {
+        let (mut f, record) = accepted("Directory listing enabled", Severity::High, 7.4);
+        f.owasp_2025 = Some("A02:2025-Security Misconfiguration".into());
+        let mut c = ctx();
+        c.exceptions = vec![record];
+
+        let out = render(&c, &[f], None);
+        assert!(
+            out.contains("10 of the 10 categories carry no actionable finding"),
+            "an accepted risk is disclosed in its register, not counted as open exposure"
+        );
     }
 
     #[test]
