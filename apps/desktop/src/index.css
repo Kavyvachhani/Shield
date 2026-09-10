@@ -11,12 +11,20 @@
  * partly overridden by dark values.
  *
  * So this keeps only what the design system does not provide and what has to
- * apply to the document itself: the webfonts, the box model, the root element
- * sizing, and the browser affordances (scrollbar, focus ring, selection) that
- * cannot be expressed as a component class.
+ * apply to the document itself: the box model, the root element sizing, and the
+ * browser affordances (scrollbar, focus ring, selection) that cannot be
+ * expressed as a component class.
+ *
+ * Fonts. This used to @import Inter and JetBrains Mono from fonts.googleapis.com,
+ * which meant an application describing itself as offline-capable and local-first
+ * made a request to Google every time it started — announcing to a third party
+ * that an engagement tool had launched, from which address, and when. On a client
+ * site or an air-gapped network that is both a disclosure and a failure: the
+ * fonts do not arrive, and the CSP had to allow two external origins to let them
+ * try. The type stack in the design system falls back to the platform's own UI
+ * font (Segoe UI on Windows, San Francisco on macOS) and its monospace, so the
+ * application now renders identically online and offline, and reaches nothing.
  */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 *,
 *::before,
