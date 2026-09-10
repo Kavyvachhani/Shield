@@ -185,7 +185,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
               width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontSize: 12, fontWeight: 700,
               background: step >= s ? 'var(--accent)' : 'var(--bg-elevated)',
-              color: step >= s ? '#020817' : 'var(--text-muted)',
+              color: step >= s ? 'var(--text-inverse)' : 'var(--text-muted)',
               border: step >= s ? 'none' : '1px solid var(--border-strong)',
               transition: 'all 0.2s',
             }}>
@@ -284,7 +284,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
                       style={{
                         padding: '10px 8px', borderRadius: 'var(--radius-sm)',
                         border: `1px solid ${targetType === t ? 'var(--accent)' : 'var(--border-strong)'}`,
-                        background: targetType === t ? 'rgba(34,211,238,0.08)' : 'var(--bg-elevated)',
+                        background: targetType === t ? 'var(--accent-soft)' : 'var(--bg-elevated)',
                         color: targetType === t ? 'var(--accent)' : 'var(--text-secondary)',
                         cursor: 'pointer', fontSize: 12, fontWeight: 500,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -325,7 +325,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
           {error && <ErrorBox msg={error} />}
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" onClick={() => setStep(1)} style={secondaryBtnStyle}>← Back</button>
+            <button type="button" onClick={() => setStep(1)} className="btn btn-lg">← Back</button>
             <SubmitButton loading={saving} label={<><Plus size={14} /> Add Target & Continue →</>} />
           </div>
         </form>
@@ -364,7 +364,7 @@ function CredentialsFields({
   return (
     <div style={{
       border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)',
-      padding: 14, background: 'rgba(255,255,255,0.02)',
+      padding: 14, background: 'var(--bg-hover)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <KeyRound size={14} style={{ color: 'var(--accent)' }} />
@@ -389,7 +389,7 @@ function CredentialsFields({
             style={{
               padding: '8px 6px', borderRadius: 'var(--radius-sm)',
               border: `1px solid ${kind === o.value ? 'var(--accent)' : 'var(--border-strong)'}`,
-              background: kind === o.value ? 'rgba(34,211,238,0.08)' : 'var(--bg-elevated)',
+              background: kind === o.value ? 'var(--accent-soft)' : 'var(--bg-elevated)',
               color: kind === o.value ? 'var(--accent)' : 'var(--text-secondary)',
               cursor: 'pointer', fontSize: 11, fontWeight: 500, transition: 'all 0.15s',
             }}
@@ -476,27 +476,18 @@ function Input({ value, onChange, placeholder, mono, secret }: { value: string; 
       placeholder={placeholder}
       type={secret ? 'password' : 'text'}
       autoComplete={secret ? 'new-password' : undefined}
-      style={{
-        width: '100%', padding: '9px 12px',
-        background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',
-        borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
-        fontSize: mono ? 12 : 13, fontFamily: mono ? "'JetBrains Mono', monospace" : 'inherit',
-        outline: 'none', transition: 'border-color 0.15s',
-      }}
-      onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-strong)'; }}
-      onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.13)'; }}
+      // The focus ring is a stylesheet concern. Setting it by hand here meant
+      // blur restored a literal white-on-dark border, which was simply the
+      // wrong colour on the light theme.
+      className={`input ${mono ? 'input-mono' : ''}`}
     />
   );
 }
 
 function ErrorBox({ msg }: { msg: string }) {
   return (
-    <div style={{
-      padding: '10px 14px', marginBottom: 16,
-      background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-      borderRadius: 'var(--radius-sm)', color: '#fca5a5', fontSize: 12,
-    }}>
-      {msg}
+    <div className="callout callout-danger" style={{ marginBottom: 'var(--s-4)' }}>
+      <span>{msg}</span>
     </div>
   );
 }
@@ -505,23 +496,12 @@ function SubmitButton({ loading, label }: { loading: boolean; label: React.React
   return (
     <button
       type="submit" disabled={loading}
-      style={{
-        width: '100%', padding: '11px 20px',
-        background: loading ? 'var(--bg-elevated)' : 'var(--accent)',
-        color: loading ? 'var(--text-muted)' : '#020817',
-        border: 'none', borderRadius: 'var(--radius-sm)',
-        fontWeight: 700, fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        transition: 'all 0.15s',
-      }}
+      className="btn btn-primary btn-lg btn-block"
     >
-      {loading ? 'Saving...' : label}
+      {loading && <Loader2 size={14} className="spin" />}
+      {loading ? 'Saving…' : label}
     </button>
   );
 }
 
-const secondaryBtnStyle: React.CSSProperties = {
-  padding: '11px 18px', background: 'var(--bg-elevated)',
-  border: '1px solid var(--border-strong)', color: 'var(--text-secondary)',
-  borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13, fontWeight: 500,
-};
+

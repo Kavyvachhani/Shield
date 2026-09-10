@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Search } from 'lucide-react';
+import { Loader2, Search, ShieldQuestion } from 'lucide-react';
 import type { CheckResult, CheckStatus, CoverageReport } from '../types';
 import { api } from '../lib/tauri';
+import { EmptyState } from '../components/ui';
 
 interface Props {
   scanId: string;
 }
 
-const STATUS_META: Record<CheckStatus, { label: string; color: string }> = {
-  passed: { label: 'Passed', color: '#16a34a' },
-  issues_found: { label: 'Issues found', color: '#dc2626' },
-  manual_required: { label: 'Manual review', color: '#d97706' },
-  not_tested: { label: 'Not tested', color: '#94a3b8' },
+// Literal hex here meant the coverage matrix was painted in four colours that
+// took no notice of the theme — fine on navy, muddy on paper, and a fifth
+// opinion about what "issues found" red is. These reference the palette, so a
+// status reads the same here as its severity does everywhere else.
+const STATUS_META: Record<CheckStatus, { label: string; color: string; stat: string }> = {
+  passed:          { label: 'Passed',        color: 'var(--success)', stat: 'stat-low' },
+  issues_found:    { label: 'Issues found',  color: 'var(--danger)',  stat: 'stat-critical' },
+  manual_required: { label: 'Manual review', color: 'var(--warning)', stat: 'stat-medium' },
+  not_tested:      { label: 'Not tested',    color: 'var(--info)',    stat: 'stat-info' },
 };
 
 const STATUS_ORDER: CheckStatus[] = ['issues_found', 'manual_required', 'not_tested', 'passed'];
@@ -71,50 +76,46 @@ export function CoverageScreen({ scanId }: Props) {
 
   if (loading) {
     return (
-      <Centered>
+      <div className="empty">
         <Loader2 size={20} className="spin" />
-        <span style={{ marginLeft: 10 }}>Building the coverage matrix…</span>
-      </Centered>
+        <p>Building the coverage matrix…</p>
+      </div>
     );
   }
 
   if (error || !coverage) {
-    return <Centered>{error || 'No coverage data is available for this scan.'}</Centered>;
+    return (
+      <EmptyState icon={<ShieldQuestion size={22} />} title="No coverage data">
+        {error || 'This scan recorded no coverage matrix. Re-run it to produce one.'}
+      </EmptyState>
+    );
   }
 
   return (
-    <div className="fade-in" style={{ padding: '24px 28px', height: '100%', overflow: 'auto' }}>
-      <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Assessment Coverage</h2>
-      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 18, maxWidth: 720, lineHeight: 1.6 }}>
+    <div className="page fade-in scroll" style={{ height: '100%' }}>
+      <h2 className="h2">Assessment Coverage</h2>
+      <div className="hint" style={{ maxWidth: 720, marginBottom: 'var(--s-5)' }}>
         Every test case from the OWASP Web Security Testing Guide considered during this assessment.
         A check only counts as passed when an engine covering it actually ran — checks needing a tool that
         was unavailable are shown as not tested, not as clean.
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(5, 1fr)', marginBottom: 'var(--s-5)' }}>
         <Kpi label="Total checks" value={coverage.totalChecks} />
-        <Kpi label="Passed" value={coverage.passed} color={STATUS_META.passed.color} />
-        <Kpi label="Issues found" value={coverage.issuesFound} color={STATUS_META.issues_found.color} />
-        <Kpi label="Manual review" value={coverage.manualRequired} color={STATUS_META.manual_required.color} />
-        <Kpi label="Not tested" value={coverage.notTested} color={STATUS_META.not_tested.color} />
+        <Kpi label="Passed" value={coverage.passed} status="passed" />
+        <Kpi label="Issues found" value={coverage.issuesFound} status="issues_found" />
+        <Kpi label="Manual review" value={coverage.manualRequired} status="manual_required" />
+        <Kpi label="Not tested" value={coverage.notTested} status="not_tested" />
       </div>
 
-      <div
-        style={{
-          border: '1px solid var(--border-strong)',
-          borderRadius: 'var(--radius-sm)',
-          padding: 14,
-          marginBottom: 20,
-          background: 'var(--bg-elevated)',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 8 }}>
+      <div className="card card-tight" style={{ marginBottom: 'var(--s-5)' }}>
+        <div className="between wrap" style={{ marginBottom: 'var(--s-2)', gap: 'var(--s-3)' }}>
           <strong>{coverage.automatedCoveragePct.toFixed(0)}% of automatable checks exercised</strong>
-          <span style={{ color: 'var(--text-muted)' }}>
+          <span className="dim small">
             Engines: {coverage.enginesExecuted.join(', ') || 'none'}
           </span>
         </div>
-        <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: '#1e293b' }}>
+        <div className="severity-bar">
           {STATUS_ORDER.map((status) => {
             const value =
               status === 'passed'
@@ -129,40 +130,26 @@ export function CoverageScreen({ scanId }: Props) {
               <div
                 key={status}
                 title={`${STATUS_META[status].label}: ${value}`}
-                style={{
-                  flex: value,
-                  background: STATUS_META[status].color,
-                }}
+                style={{ flexGrow: value, background: STATUS_META[status].color }}
               />
             );
           })}
         </div>
         {coverage.enginesUnavailable.length > 0 && (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.6 }}>
+          <div className="hint" style={{ marginTop: 'var(--s-2)' }}>
             Install {coverage.enginesUnavailable.join(', ')} and re-run to close the remaining gaps.
           </div>
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200 }}>
-          <Search
-            size={13}
-            style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}
-          />
+      <div className="row wrap" style={{ marginBottom: 'var(--s-4)', gap: 'var(--s-2)' }}>
+        <div className="search" style={{ flex: '1 1 240px', minWidth: 200 }}>
+          <Search size={13} />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by reference, name, CWE or OWASP category"
-            style={{
-              width: '100%',
-              padding: '8px 10px 8px 30px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-strong)',
-              background: 'var(--bg-base)',
-              color: 'inherit',
-              fontSize: 12,
-            }}
+            aria-label="Search coverage checks"
           />
         </div>
         <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" />
@@ -178,58 +165,53 @@ export function CoverageScreen({ scanId }: Props) {
       </div>
 
       {grouped.length === 0 && (
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: 20 }}>
-          No checks match the current filter.
-        </div>
+        <EmptyState icon={<Search size={22} />} title="No checks match this filter">
+          Clear the search or choose a different status to see the rest of the matrix.
+        </EmptyState>
       )}
 
       {grouped.map(([category, items]) => (
-        <section key={category} style={{ marginBottom: 26 }}>
-          <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-            {category} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({items.length})</span>
+        <section key={category} style={{ marginBottom: 'var(--s-6)' }}>
+          <h3 className="h3" style={{ marginBottom: 'var(--s-2)' }}>
+            {category} <span className="dim" style={{ fontWeight: 400 }}>({items.length})</span>
           </h3>
-          <div style={{ border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+          <div className="card card-flush">
             {items.map((r, i) => (
               <div
                 key={r.id}
+                className="grid"
                 style={{
-                  display: 'grid',
                   gridTemplateColumns: '120px 1fr 130px 150px',
-                  gap: 12,
-                  padding: '10px 14px',
-                  fontSize: 12,
+                  padding: 'var(--s-3) var(--s-4)',
                   alignItems: 'start',
                   borderTop: i === 0 ? 'none' : '1px solid var(--border)',
                 }}
               >
-                <code style={{ fontSize: 11, opacity: 0.75 }}>{r.id}</code>
+                <code className="code-inline">{r.id}</code>
                 <div>
                   <div style={{ fontWeight: 500 }}>{r.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 }}>
-                    {r.clientSummary}
-                  </div>
+                  <div className="hint">{r.clientSummary}</div>
                 </div>
                 <div>
+                  {/* The status colour goes on the border and the text rather
+                      than as a white-on-colour fill: four saturated pills per
+                      row is what made this table hard to read. */}
                   <span
+                    className="badge"
                     style={{
-                      display: 'inline-block',
-                      padding: '2px 9px',
-                      borderRadius: 99,
-                      fontSize: 10,
-                      fontWeight: 700,
-                      color: '#fff',
-                      background: STATUS_META[r.status].color,
+                      color: STATUS_META[r.status].color,
+                      border: `1px solid ${STATUS_META[r.status].color}`,
                     }}
                   >
                     {r.statusLabel}
                   </span>
                   {r.findingCount > 0 && (
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                    <div className="dim small" style={{ marginTop: 4 }}>
                       {r.findingCount} finding{r.findingCount === 1 ? '' : 's'}
                     </div>
                   )}
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                <div className="dim small">
                   {r.enginesExecuted.length > 0 ? r.enginesExecuted.join(', ') : '—'}
                   {r.enginesMissing.length > 0 && (
                     <div style={{ opacity: 0.7 }}>missing: {r.enginesMissing.join(', ')}</div>
@@ -244,29 +226,11 @@ export function CoverageScreen({ scanId }: Props) {
   );
 }
 
-function Kpi({ label, value, color }: { label: string; value: number; color?: string }) {
+function Kpi({ label, value, status }: { label: string; value: number; status?: CheckStatus }) {
   return (
-    <div
-      style={{
-        border: '1px solid var(--border-strong)',
-        borderRadius: 'var(--radius-sm)',
-        padding: '14px 12px',
-        textAlign: 'center',
-        background: 'var(--bg-elevated)',
-      }}
-    >
-      <div style={{ fontSize: 24, fontWeight: 700, color: color ?? 'inherit' }}>{value}</div>
-      <div
-        style={{
-          fontSize: 10,
-          letterSpacing: 0.6,
-          textTransform: 'uppercase',
-          color: 'var(--text-muted)',
-          marginTop: 2,
-        }}
-      >
-        {label}
-      </div>
+    <div className={`stat ${status ? STATUS_META[status].stat : ''}`}>
+      <span className="stat-value">{value}</span>
+      <span className="stat-label">{label}</span>
     </div>
   );
 }
@@ -285,36 +249,13 @@ function FilterChip({
   return (
     <button
       type="button"
+      className="btn btn-sm"
+      aria-pressed={active}
       onClick={onClick}
-      style={{
-        padding: '6px 12px',
-        borderRadius: 99,
-        fontSize: 11,
-        fontWeight: 600,
-        cursor: 'pointer',
-        color: 'inherit',
-        border: `1px solid ${active ? color ?? 'rgba(34,211,238,0.5)' : 'var(--border-strong)'}`,
-        background: active ? `${color ?? '#22d3ee'}22` : 'var(--bg-elevated)',
-      }}
+      style={active && color ? { borderColor: color, color } : undefined}
     >
+      {color && <span className="dot" style={{ background: color }} />}
       {label}
     </button>
-  );
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'var(--text-muted)',
-        fontSize: 13,
-      }}
-    >
-      {children}
-    </div>
   );
 }

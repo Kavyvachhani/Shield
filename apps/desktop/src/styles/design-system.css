@@ -55,6 +55,20 @@
   --danger:  #f87171;
   --purple:  #a78bfa;
 
+  /* Tinted fills and borders for each semantic colour. These existed only for
+     the severity scale, so every callout, chip and highlight built from a
+     semantic colour was hand-mixing its own rgba() at the call site — dozens of
+     literals that stayed dark when the theme went light. */
+  --accent-border:  rgba(34, 211, 238, 0.32);
+  --success-bg:     rgba(52, 211, 153, 0.12);
+  --success-border: rgba(52, 211, 153, 0.30);
+  --warning-bg:     rgba(251, 191, 36, 0.12);
+  --warning-border: rgba(251, 191, 36, 0.30);
+  --danger-bg:      rgba(239, 68, 68, 0.12);
+  --danger-border:  rgba(239, 68, 68, 0.30);
+  --purple-soft:    rgba(167, 139, 250, 0.14);
+  --purple-border:  rgba(167, 139, 250, 0.32);
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow:    0 4px 16px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
@@ -94,6 +108,18 @@
   --warning: #a16207;
   --danger:  #b91c1c;
   --purple:  #7c3aed;
+
+  /* Opaque on paper: a translucent tint over white turns milky rather than
+     tinted, and loses the contrast the text above it needs. */
+  --accent-border:  #a5d8e4;
+  --success-bg:     #f0fdf4;
+  --success-border: #bbf7d0;
+  --warning-bg:     #fefce8;
+  --warning-border: #fde68a;
+  --danger-bg:      #fef2f2;
+  --danger-border:  #fecaca;
+  --purple-soft:    #f5f3ff;
+  --purple-border:  #ddd6fe;
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow:    0 4px 16px rgba(15, 23, 42, 0.08);

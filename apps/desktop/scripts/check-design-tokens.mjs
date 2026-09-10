@@ -37,14 +37,43 @@ function walk(dir) {
 }
 
 const problems = [];
+const literals = [];
+
+/** A colour written directly into a component rather than taken from the palette. */
+const COLOUR_LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d/g;
+
 for (const file of walk(SRC)) {
   const text = readFileSync(file, 'utf8');
+  const lines = text.split('\n');
+
   for (const name of new Set(referencesIn(text))) {
     if (!defined.has(name)) {
-      const line = text.split('\n').findIndex((l) => l.includes(`var(${name})`)) + 1;
+      const line = lines.findIndex((l) => l.includes(`var(${name})`)) + 1;
       problems.push(`${relative(SRC, file)}:${line}  ${name}`);
     }
   }
+
+  // Only components. The stylesheet is where literal colours belong — it is the
+  // one place that defines them per theme.
+  if (!/\.tsx?$/.test(file)) continue;
+  lines.forEach((l, i) => {
+    for (const hit of l.match(COLOUR_LITERAL) ?? []) {
+      literals.push(`${relative(SRC, file)}:${i + 1}  ${hit}…`);
+    }
+  });
+}
+
+if (literals.length) {
+  console.error(
+    `\n${literals.length} hardcoded colour(s) in components.\n` +
+      `A literal cannot follow the theme: it stays as written when the palette\n` +
+      `switches, which is how the light theme ended up with white-on-dark borders.\n\n  ` +
+      literals.join('\n  ') +
+      `\n\nUse the token that owns the concept — --accent/--accent-soft/--accent-border,\n` +
+      `--success/--warning/--danger and their -bg/-border pairs, the severity scale,\n` +
+      `or --text-*/--bg-*. Add a token to styles/design-system.css if none fits.\n`,
+  );
+  process.exit(1);
 }
 
 if (problems.length) {

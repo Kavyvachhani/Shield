@@ -302,7 +302,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
         </div>
 
         {importMsg && (
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'rgba(52,211,153,0.06)', fontSize: 11, color: 'var(--success)', lineHeight: 1.6 }}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--success-bg)', fontSize: 11, color: 'var(--success)', lineHeight: 1.6 }}>
             {importMsg}
           </div>
         )}
@@ -324,7 +324,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                   <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', opacity: e.active ? 1 : 0.55 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700, background: e.kind === 'Accepted Risk' ? 'rgba(251,191,36,0.14)' : 'rgba(148,163,184,0.14)', color: e.kind === 'Accepted Risk' ? '#fde68a' : '#94a3b8' }}>
+                        <span style={{ padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700, background: e.kind === 'Accepted Risk' ? 'var(--warning-bg)' : 'var(--info-bg)', color: e.kind === 'Accepted Risk' ? 'var(--medium)' : 'var(--info)' }}>
                           {e.kind}
                         </span>
                         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -360,7 +360,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             <FilterSelect label="Tool" value={toolFilter} onChange={setToolFilter} options={['Semgrep', 'Trivy', 'Gitleaks', 'OWASP ZAP', 'Nuclei']} />
             {(sevFilter || statusFilter || toolFilter) && (
               <button onClick={() => { setSevFilter(''); setStatusFilter(''); setToolFilter(''); }}
-                style={{ padding: '5px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
+                style={{ padding: '5px 12px', background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <X size={11} /> Clear
               </button>
             )}
@@ -473,7 +473,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                   <span className={`badge ${SEV_COLORS[selected.severity] || 'badge-info'}`}>{selected.severity}</span>
                   {selected.cweId && <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)' }}>{selected.cweId}</span>}
                   {selected.kevListed && (
-                    <span style={{ padding: '2px 8px', borderRadius: 99, background: 'rgba(239,68,68,0.15)', color: '#fca5a5', fontSize: 10, fontWeight: 700, border: '1px solid rgba(239,68,68,0.3)' }}>
+                    <span style={{ padding: '2px 8px', borderRadius: 99, background: 'var(--danger-bg)', color: 'var(--critical)', fontSize: 10, fontWeight: 700, border: '1px solid var(--danger-border)' }}>
                       CISA KEV
                     </span>
                   )}
@@ -503,7 +503,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 <ScoreCard label="KEV" value={selected.kevListed ? 'YES ⚡' : 'No'} highlight={selected.kevListed} />
               </div>
               {selected.priorityRationale && (
-                <div style={{ padding: '10px 12px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--accent)', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
+                <div style={{ padding: '10px 12px', background: 'var(--accent-soft)', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--accent)', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
                   💡 <strong>Rationale:</strong> {selected.priorityRationale}
                 </div>
               )}
@@ -525,7 +525,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
             {/* Remediation */}
             <DetailSection title="Remediation Guidance">
-              <div style={{ padding: '12px 14px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--success)', lineHeight: 1.6 }}>
+              <div style={{ padding: '12px 14px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--success)', lineHeight: 1.6 }}>
                 {selected.remediation}
               </div>
             </DetailSection>
@@ -577,7 +577,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                     padding: '5px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600,
                     cursor: 'pointer', border: '1px solid',
                     borderColor: triageStatus === s ? 'var(--accent)' : 'var(--border)',
-                    background: triageStatus === s ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)',
+                    background: triageStatus === s ? 'var(--accent-soft)' : 'var(--bg-elevated)',
                     color: triageStatus === s ? 'var(--accent)' : 'var(--text-muted)',
                     transition: 'all 0.12s',
                   }}>
@@ -616,7 +616,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
               )}
 
               {recordsException && (
-                <div style={{ marginTop: 10, padding: '9px 11px', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <div style={{ marginTop: 10, padding: '9px 11px', background: 'var(--info-bg)', border: '1px solid var(--info-border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                   <strong>This carries forward.</strong>{' '}
                   {triageStatus === 'False Positive'
                     ? 'The finding is removed from every report, and the same dismissal is applied to every later scan of this target — you will not be asked about it again.'
@@ -626,13 +626,13 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
               {triageError && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{triageError}</div>}
               {triageEffect && (
-                <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 8, padding: '8px 10px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
+                <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 8, padding: '8px 10px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
                   {triageEffect}
                 </div>
               )}
               <button
                 onClick={submitTriage} disabled={triaging}
-                style={{ marginTop: 10, padding: '8px 20px', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                style={{ marginTop: 10, padding: '8px 20px', background: 'var(--accent-soft)', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Flag size={13} /> {triaging ? 'Saving...' : 'Save Triage Decision'}
               </button>
             </DetailSection>
@@ -721,11 +721,11 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
 
 function StatusPill({ status }: { status: string }) {
   const colors: Record<string, { bg: string; color: string }> = {
-    'Open': { bg: 'rgba(239,68,68,0.1)', color: '#fca5a5' },
-    'In Progress': { bg: 'rgba(251,191,36,0.1)', color: '#fde68a' },
-    'Remediated': { bg: 'rgba(52,211,153,0.1)', color: '#6ee7b7' },
-    'Accepted Risk': { bg: 'rgba(148,163,184,0.1)', color: '#94a3b8' },
-    'False Positive': { bg: 'rgba(148,163,184,0.08)', color: '#64748b' },
+    'Open': { bg: 'var(--danger-bg)', color: 'var(--critical)' },
+    'In Progress': { bg: 'var(--warning-bg)', color: 'var(--medium)' },
+    'Remediated': { bg: 'var(--success-bg)', color: 'var(--low)' },
+    'Accepted Risk': { bg: 'var(--info-bg)', color: 'var(--info)' },
+    'False Positive': { bg: 'var(--info-bg)', color: 'var(--text-muted)' },
   };
   const c = colors[status] ?? colors['Open'];
   return (
@@ -745,10 +745,10 @@ function StatusPill({ status }: { status: string }) {
 function ConfidencePanel({ finding }: { finding: Finding }) {
   const confidence = Math.round((1 - (finding.falsePositiveConfidence ?? 0.25)) * 100);
   const [label, color] =
-      confidence >= 90 ? ['Confirmed', '#34d399']
-    : confidence >= 70 ? ['High confidence', '#6ee7b7']
-    : confidence >= 45 ? ['Needs verification', '#fbbf24']
-    :                    ['Likely false positive', '#f87171'];
+      confidence >= 90 ? ['Confirmed', 'var(--success)']
+    : confidence >= 70 ? ['High confidence', 'var(--low)']
+    : confidence >= 45 ? ['Needs verification', 'var(--warning)']
+    :                    ['Likely false positive', 'var(--danger)'];
 
   const tools = finding.sourceTools.map(t => t.toLowerCase());
   const runtime = tools.some(t => ['native', 'zap', 'nuclei', 'dast'].some(k => t.includes(k)));
@@ -794,9 +794,9 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
 }
 
 function Tag({ label, color }: { label: string; color: string }) {
-  const c = color === 'purple' ? { bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.3)', text: '#c4b5fd' }
-           : color === 'cyan'   ? { bg: 'rgba(34,211,238,0.08)', border: 'rgba(34,211,238,0.2)', text: '#67e8f9' }
-           : { bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.2)', text: '#94a3b8' };
+  const c = color === 'purple' ? { bg: 'var(--purple-soft)', border: 'var(--purple-border)', text: 'var(--purple)' }
+           : color === 'cyan'   ? { bg: 'var(--accent-soft)', border: 'var(--accent-border)', text: 'var(--accent)' }
+           : { bg: 'var(--info-bg)', border: 'var(--info-border)', text: 'var(--info)' };
   return (
     <span style={{ padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: c.bg, border: `1px solid ${c.border}`, color: c.text }}>
       {label}
@@ -806,7 +806,7 @@ function Tag({ label, color }: { label: string; color: string }) {
 
 function ScoreCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: `1px solid ${highlight ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
+    <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: `1px solid ${highlight ? 'var(--danger-border)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
       <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 16, fontWeight: 800, color: highlight ? 'var(--danger)' : 'var(--text-primary)' }}>{value}</div>
     </div>

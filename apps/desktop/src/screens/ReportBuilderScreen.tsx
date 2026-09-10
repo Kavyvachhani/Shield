@@ -261,8 +261,8 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                     borderRadius: 'var(--radius-sm)',
                     cursor: 'pointer',
                     textAlign: 'left',
-                    border: `1px solid ${selected ? 'rgba(34,211,238,0.4)' : 'var(--border-strong)'}`,
-                    background: selected ? 'rgba(34,211,238,0.06)' : 'var(--bg-elevated)',
+                    border: `1px solid ${selected ? 'var(--accent-border)' : 'var(--border-strong)'}`,
+                    background: selected ? 'var(--accent-soft)' : 'var(--bg-elevated)',
                     transition: 'all 0.15s',
                   }}
                 >
@@ -286,7 +286,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
               placeholder={project.companyName}
-              style={inputStyle}
+              className="input"
             />
           </Field>
           <Field label="Assessed by (optional)">
@@ -294,7 +294,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               value={analyst}
               onChange={(e) => setAnalyst(e.target.value)}
               placeholder="Your name or team"
-              style={inputStyle}
+              className="input"
             />
           </Field>
 
@@ -303,7 +303,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               value={reviewedBy}
               onChange={(e) => setReviewedBy(e.target.value)}
               placeholder="Second reviewer — shown in document control and sign-off"
-              style={inputStyle}
+              className="input"
             />
           </Field>
 
@@ -312,7 +312,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
               <select
                 value={classification}
                 onChange={(e) => setClassification(e.target.value)}
-                style={inputStyle}
+                className="input"
               >
                 {['Confidential', 'Restricted', 'Internal Use Only', 'Commercial in Confidence'].map(c => (
                   <option key={c} value={c}>{c}</option>
@@ -324,7 +324,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 value={revision}
                 onChange={(e) => setRevision(e.target.value)}
                 placeholder="1.0"
-                style={inputStyle}
+                className="input"
               />
             </Field>
           </div>
@@ -364,7 +364,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                     objectFit: 'contain',
                     // Most client logos are dark artwork on transparency, which
                     // would vanish against the dark UI.
-                    background: '#fff',
+                    background: 'var(--text-inverse)',
                     borderRadius: 4,
                     padding: 4,
                   }}
@@ -374,7 +374,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                     type="button"
                     onClick={() => logoInput.current?.click()}
                     disabled={logoBusy}
-                    style={{ ...miniButton, opacity: logoBusy ? 0.6 : 1 }}
+                    className="btn btn-sm"
                   >
                     Replace
                   </button>
@@ -382,7 +382,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                     type="button"
                     onClick={clearLogo}
                     disabled={logoBusy}
-                    style={{ ...miniButton, opacity: logoBusy ? 0.6 : 1 }}
+                    className="btn btn-sm"
                   >
                     <X size={11} /> Remove
                   </button>
@@ -393,7 +393,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 type="button"
                 onClick={() => logoInput.current?.click()}
                 disabled={logoBusy}
-                style={{ ...secondaryButton, width: '100%', opacity: logoBusy ? 0.6 : 1 }}
+                className="btn btn-block"
               >
                 {logoBusy ? <Loader2 size={14} className="spin" /> : <ImagePlus size={14} />}
                 {logoBusy ? 'Saving…' : 'Upload logo'}
@@ -411,11 +411,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
           type="button"
           onClick={generate}
           disabled={generating}
-          style={{
-            ...primaryButton,
-            opacity: generating ? 0.6 : 1,
-            cursor: generating ? 'wait' : 'pointer',
-          }}
+          className="btn btn-primary btn-block"
         >
           {generating ? <Loader2 size={15} className="spin" /> : <FileText size={15} />}
           {generating ? 'Generating…' : 'Generate report'}
@@ -428,7 +424,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 value={exportDir}
                 onChange={(e) => setExportDir(e.target.value)}
                 placeholder="Folder to save into"
-                style={inputStyle}
+                className="input"
               />
             </Field>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
@@ -439,7 +435,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 type="button"
                 onClick={saveToDisk}
                 disabled={exporting}
-                style={{ ...primaryButton, flex: 1, opacity: exporting ? 0.6 : 1 }}
+                className="btn btn-primary grow"
               >
                 {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
                 Save
@@ -448,7 +444,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 <button
                   type="button"
                   onClick={() => setPreview((p) => !p)}
-                  style={{ ...secondaryButton, flex: 1 }}
+                  className="btn grow"
                 >
                   <Eye size={15} />
                   {preview ? 'Hide' : 'Preview'}
@@ -461,7 +457,8 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                   type="button"
                   onClick={saveAsPdf}
                   disabled={printing}
-                  style={{ ...secondaryButton, width: '100%', marginTop: 8, opacity: printing ? 0.6 : 1 }}
+                  className="btn btn-block"
+                  style={{ marginTop: 'var(--s-2)' }}
                 >
                   {printing ? <Loader2 size={15} className="spin" /> : <Printer size={15} />}
                   Save as PDF
@@ -530,7 +527,7 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
             title="Report preview"
             sandbox=""
             srcDoc={report.content}
-            style={{ border: 'none', width: '100%', height: '100%', background: '#fff' }}
+            style={{ border: 'none', width: '100%', height: '100%', background: 'var(--text-inverse)' }}
           />
         )}
       </div>
@@ -540,64 +537,10 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
 
 // ── Small presentational helpers ─────────────────────────────────────────────
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '8px 10px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border-strong)',
-  background: 'var(--bg-base)',
-  color: 'inherit',
-  fontSize: 12,
-};
-
-const primaryButton: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 8,
-  padding: '10px 14px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid rgba(34,211,238,0.4)',
-  background: 'rgba(34,211,238,0.12)',
-  color: 'inherit',
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
-const secondaryButton: React.CSSProperties = {
-  ...primaryButton,
-  border: '1px solid var(--border-strong)',
-  background: 'var(--bg-elevated)',
-};
-
-const miniButton: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 4,
-  padding: '4px 8px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--border-strong)',
-  background: 'var(--bg-elevated)',
-  color: 'inherit',
-  fontSize: 10,
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div
-        style={{
-          fontSize: 10,
-          fontWeight: 700,
-          letterSpacing: 0.8,
-          textTransform: 'uppercase',
-          color: 'var(--text-muted)',
-          marginBottom: 8,
-        }}
+      <div className="label" style={{ marginBottom: 'var(--s-2)' }}
       >
         {title}
       </div>
@@ -628,8 +571,8 @@ function Notice({ tone, children }: { tone: 'ok' | 'error'; children: React.Reac
         fontSize: 11,
         lineHeight: 1.6,
         wordBreak: 'break-word',
-        border: `1px solid ${ok ? 'rgba(22,163,74,0.4)' : 'rgba(220,38,38,0.4)'}`,
-        background: ok ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)',
+        border: `1px solid ${ok ? 'var(--success-border)' : 'var(--danger-border)'}`,
+        background: ok ? 'var(--success-bg)' : 'var(--danger-bg)',
       }}
     >
       {children}

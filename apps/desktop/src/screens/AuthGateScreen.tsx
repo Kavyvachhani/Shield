@@ -77,24 +77,19 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
   }
 
   return (
-    <div style={{ maxWidth: 680, margin: '0 auto', padding: '32px 20px' }} className="fade-in">
-      {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8,
-        padding: '14px 18px',
-        background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)',
-        borderRadius: 'var(--radius)',
-      }}>
-        <AlertTriangle size={20} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+    <div className="page fade-in" style={{ maxWidth: 680, margin: '0 auto' }}>
+      <div className="callout callout-warning">
+        <AlertTriangle size={20} />
         <div>
-          <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 13 }}>Authorization Gate — Mandatory Before Any Dynamic Scan</div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>
-            DAST capabilities are locked until a signed Rules of Engagement is stored. This action writes to the tamper-evident audit ledger.
+          <div style={{ fontWeight: 700 }}>Authorization Gate — mandatory before any dynamic scan</div>
+          <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>
+            DAST capabilities are locked until a signed Rules of Engagement is stored. This action
+            writes to the tamper-evident audit ledger.
           </div>
         </div>
       </div>
 
-      <form onSubmit={handleSign} style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <form onSubmit={handleSign} className="col" style={{ marginTop: 'var(--s-6)', gap: 'var(--s-5)' }}>
         {/* Target summary */}
         <Section title="Engagement Target">
           <InfoRow label="Target Name" value={target.name} />
@@ -129,10 +124,11 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
             placeholder="/admin/danger"
           />
           <div>
-            <label style={labelStyle}>Rate Limit (req/sec) — Max: {scope.rateLimitRps}</label>
+            <label className="label" htmlFor="rate-limit">Rate limit (req/sec) — max: {scope.rateLimitRps}</label>
             <input
               type="range" min={1} max={20} value={scope.rateLimitRps}
               onChange={(e) => setScope(s => ({ ...s, rateLimitRps: Number(e.target.value) }))}
+              id="rate-limit"
               style={{ width: '100%', accentColor: 'var(--accent)' }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
@@ -146,7 +142,8 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
           <button
             type="button"
             onClick={() => setShowRoeDoc(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+            className="btn btn-ghost btn-sm"
+            style={{ color: 'var(--accent)' }}
           >
             <FileSignature size={14} />
             {showRoeDoc ? 'Collapse' : 'Review RoE Document'}
@@ -157,17 +154,13 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
               value={roeText}
               onChange={(e) => setRoeText(e.target.value)}
               rows={10}
-              style={{
-                width: '100%', marginTop: 10, padding: '10px 12px',
-                background: 'var(--bg-base)', border: '1px solid var(--border-strong)',
-                borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
-                fontFamily: "'JetBrains Mono', monospace", fontSize: 11, resize: 'vertical',
-                outline: 'none',
-              }}
+              className="textarea input-mono"
+              style={{ marginTop: 'var(--s-2)' }}
+              aria-label="Rules of Engagement document"
             />
           )}
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-            <Lock size={10} style={{ display: 'inline', marginRight: 4 }} />
+          <div className="hint row" style={{ gap: 4, marginTop: 'var(--s-1)' }}>
+            <Lock size={10} />
             Only the SHA-256 hash of this document is stored. The plaintext is never persisted.
           </div>
         </Section>
@@ -180,14 +173,18 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
             { key: 'c3', text: 'I will NOT perform denial-of-service, destructive, or data-exfiltrating actions.' },
             { key: 'c4', text: 'I understand that this acknowledgement is recorded in a tamper-evident, hash-chained audit ledger.' },
           ].map(({ key, text }) => (
-            <label key={key} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', marginBottom: 10 }}>
+            <label
+              key={key}
+              className={`checkline ${checklist[key as keyof typeof checklist] ? 'checkline-on' : ''}`}
+              style={{ alignItems: 'flex-start' }}
+            >
               <input
                 type="checkbox"
                 checked={checklist[key as keyof typeof checklist]}
                 onChange={(e) => setChecklist(c => ({ ...c, [key]: e.target.checked }))}
-                style={{ marginTop: 2, accentColor: 'var(--success)', width: 15, height: 15, flexShrink: 0 }}
+                style={{ marginTop: 2 }}
               />
-              <span style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>{text}</span>
+              <span>{text}</span>
             </label>
           ))}
         </Section>
@@ -198,39 +195,22 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
             value={reviewerName}
             onChange={(e) => setReviewerName(e.target.value)}
             placeholder="Full name of the lead analyst signing this RoE"
-            style={{
-              width: '100%', padding: '10px 12px',
-              background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)',
-              borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
-              fontSize: 13, outline: 'none',
-            }}
+            className="input"
+            aria-label="Reviewer name"
           />
         </Section>
 
         {error && (
-          <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: '#fca5a5', fontSize: 12 }}>
-            {error}
-          </div>
+          <div className="callout callout-danger"><span>{error}</span></div>
         )}
 
-        <button
-          type="submit" disabled={!canSign || saving}
-          style={{
-            padding: '13px 24px', borderRadius: 'var(--radius-sm)', border: 'none',
-            background: canSign && !saving ? 'linear-gradient(135deg, #059669, #0d9488)' : 'var(--bg-elevated)',
-            color: canSign && !saving ? 'white' : 'var(--text-muted)',
-            fontWeight: 700, fontSize: 14, cursor: canSign && !saving ? 'pointer' : 'not-allowed',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-            transition: 'all 0.2s',
-            boxShadow: canSign && !saving ? '0 4px 20px rgba(5,150,105,0.25)' : 'none',
-          }}
-        >
+        <button type="submit" className="btn btn-primary btn-lg btn-block" disabled={!canSign || saving}>
           <ShieldCheck size={18} />
-          {saving ? 'Signing & Committing to Audit Ledger...' : 'Sign Rules of Engagement & Unlock Scan Engine'}
+          {saving ? 'Signing and committing to the audit ledger…' : 'Sign Rules of Engagement and unlock the scan engine'}
         </button>
 
         {!canSign && (
-          <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11 }}>
+          <p className="hint" style={{ textAlign: 'center' }}>
             Complete all checklist items, add ≥1 allowed domain, and enter reviewer name to sign.
           </p>
         )}
@@ -243,20 +223,20 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card" style={{ padding: '18px 20px' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 14 }}>
+    <div className="card">
+      <div className="label" style={{ marginBottom: 'var(--s-4)' }}>
         {title}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>{children}</div>
+      <div className="col" style={{ gap: 'var(--s-3)' }}>{children}</div>
     </div>
   );
 }
 
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{label}</span>
-      <span style={{ color: 'var(--text-primary)', fontSize: 12, fontFamily: mono ? "'JetBrains Mono', monospace" : 'inherit', fontWeight: 500 }}>{value}</span>
+    <div className="between">
+      <span className="dim">{label}</span>
+      <span className={mono ? 'mono' : ''} style={{ fontWeight: 500 }}>{value}</span>
     </div>
   );
 }
@@ -267,34 +247,30 @@ function TagInput({ label, required, tags, input, setInput, onAdd, onRemove, pla
 }) {
   return (
     <div>
-      <label style={labelStyle}>{label} {required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      <label className="label">{label} {required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
+      <div className="row" style={{ marginBottom: 'var(--s-2)', gap: 'var(--s-2)' }}>
         <input
           value={input} onChange={(e) => setInput(e.target.value)}
           placeholder={placeholder}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(); } }}
-          style={{
-            flex: 1, padding: '7px 10px', background: 'var(--bg-base)',
-            border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-            color: 'var(--text-primary)', fontSize: 12, fontFamily: "'JetBrains Mono', monospace",
-            outline: 'none',
-          }}
+          className="input input-mono grow"
+          aria-label={label}
         />
-        <button type="button" onClick={onAdd} style={{ padding: '7px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-          Add
-        </button>
+        <button type="button" className="btn" onClick={onAdd}>Add</button>
       </div>
       {tags.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div className="row wrap" style={{ gap: 'var(--s-1)' }}>
           {tags.map((t) => (
-            <span key={t} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '3px 10px', borderRadius: 99,
-              background: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.2)',
-              color: 'var(--accent)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
-            }}>
+            <span key={t} className="badge badge-accent mono">
               {t}
-              <button type="button" onClick={() => onRemove(t)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', lineHeight: 1, padding: 0, opacity: 0.6 }}>×</button>
+              <button
+                type="button"
+                onClick={() => onRemove(t)}
+                aria-label={`Remove ${t}`}
+                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', lineHeight: 1, padding: 0, opacity: 0.6 }}
+              >
+                ×
+              </button>
             </span>
           ))}
         </div>
@@ -302,12 +278,6 @@ function TagInput({ label, required, tags, input, setInput, onAdd, onRemove, pla
     </div>
   );
 }
-
-const labelStyle: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600,
-  color: 'var(--text-muted)', marginBottom: 6,
-  letterSpacing: '0.05em', textTransform: 'uppercase',
-};
 
 function generateDefaultRoE(target: Target): string {
   return `RULES OF ENGAGEMENT

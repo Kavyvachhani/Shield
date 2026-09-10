@@ -45,6 +45,23 @@ interface StageStatus {
 // stage the backend runs but this list omits emits events that match no row, so
 // its progress and its failures are both invisible — which is exactly how the
 // native engine came to look like it was doing nothing.
+/** Stage state to the class that colours its card. */
+const STAGE_STATE_CLASS: Record<StageState, string> = {
+  pending: '',
+  running: 'stage-running',
+  done: 'stage-done',
+  skipped: '',
+  failed: 'stage-failed',
+};
+
+/** Log level to the class that colours the line. */
+const LOG_LEVEL_CLASS: Record<string, string> = {
+  info: 'log-info',
+  warn: 'log-warn',
+  error: 'log-error',
+  done: 'log-done',
+};
+
 const STAGE_DEFS: StageStatus[] = [
   { stage: 'code',           label: 'Sentinel Code',           stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
   { stage: 'dependencies',   label: 'Sentinel Dependencies',   stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
@@ -371,27 +388,23 @@ export function ScanConsoleScreen({
   }
 
   return (
-    <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20, height: '100%' }} className="fade-in">
+    <div className="page col fade-in" style={{ gap: 'var(--s-5)', height: '100%' }}>
       {/* Engine configuration panel */}
       {showConfig && (
-        <div style={{ padding: '14px 16px', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
-              Engine configuration (JSON) — optional
-            </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+        <div className="card card-tight">
+          <div className="between wrap" style={{ marginBottom: 'var(--s-2)', gap: 'var(--s-3)' }}>
+            <label className="label" htmlFor="engine-config">Engine configuration (JSON) — optional</label>
+            <div className="row" style={{ gap: 'var(--s-1)' }}>
               {CONFIG_PRESETS.map(preset => (
                 <button
                   key={preset.label}
-                  onClick={() => { setConfigText(preset.json); setConfigError(''); }}
-                  style={{ padding: '3px 9px', fontSize: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  className="btn btn-sm"
+                  onClick={() => { setConfigText(preset.json); setConfigError(''); }}>
                   {preset.label}
                 </button>
               ))}
               {configText && (
-                <button
-                  onClick={() => { setConfigText(''); setConfigError(''); }}
-                  style={{ padding: '3px 9px', fontSize: 10, background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setConfigText(''); setConfigError(''); }}>
                   Clear
                 </button>
               )}
@@ -399,19 +412,19 @@ export function ScanConsoleScreen({
           </div>
 
           <textarea
+            id="engine-config"
+            className="textarea input-mono"
             value={configText}
             onChange={(e) => { setConfigText(e.target.value); setConfigError(''); }}
             spellCheck={false}
             rows={7}
             placeholder={CONFIG_PLACEHOLDER}
-            style={{ width: '100%', padding: '10px 12px', background: 'var(--bg-base)', border: `1px solid ${configError ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", outline: 'none', resize: 'vertical', lineHeight: 1.6 }}
+            aria-invalid={configError ? true : undefined}
           />
 
-          {configError && (
-            <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{configError}</div>
-          )}
+          {configError && <div className="error-text">{configError}</div>}
 
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
+          <div className="hint" style={{ marginTop: 'var(--s-2)' }}>
             Left blank, the engine defaults apply: <code>5</code> requests/sec, a <code>1800</code>s job
             budget, ZAP at <code>http://localhost:8090</code>, Nuclei filtered to
             <code> critical,high,medium</code>.{' '}
@@ -448,24 +461,25 @@ export function ScanConsoleScreen({
       </div>
 
       {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+      <div className="between wrap" style={{ gap: 'var(--s-3)' }}>
         <div>
-          <h2 style={{ fontSize: 16, fontWeight: 700 }}>Scan Console</h2>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>{target.baseUrl}</div>
+          <h2 className="h2">Scan Console</h2>
+          <div className="mono dim small">{target.baseUrl}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="row" style={{ gap: 'var(--s-3)' }}>
           {/* DAST toggle — only if authorized */}
           {/* A profile that declares itself source-only must not have live
               testing switched on by a control left set from a previous run. */}
           {(!profile || profile.runDast) && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isAuthorized ? 'pointer' : 'not-allowed', opacity: isAuthorized ? 1 : 0.45 }}>
+            <label className={`checkline ${runDast && isAuthorized ? 'checkline-on' : ''}`}>
               <input
                 type="checkbox" checked={runDast} disabled={!isAuthorized}
                 onChange={(e) => setRunDast(e.target.checked)}
-                style={{ accentColor: 'var(--accent)', width: 14, height: 14 }}
               />
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                {isAuthorized ? <Shield size={13} style={{ color: 'var(--success)' }} /> : <ShieldOff size={13} style={{ color: 'var(--warning)' }} />}
+              <span className="row" style={{ gap: 'var(--s-1)' }}>
+                {isAuthorized
+                  ? <Shield size={13} style={{ color: 'var(--success)' }} />
+                  : <ShieldOff size={13} style={{ color: 'var(--warning)' }} />}
                 Include DAST {!isAuthorized && '(record authorisation first)'}
               </span>
             </label>
@@ -477,35 +491,30 @@ export function ScanConsoleScreen({
           )}
 
           <button
+            className="btn"
+            aria-pressed={showConfig}
             onClick={() => setShowConfig(v => !v)}
             disabled={isRunning}
-            title="Per-scan engine configuration (JSON)"
-            style={{
-              padding: '6px 12px', fontSize: 12, cursor: isRunning ? 'not-allowed' : 'pointer',
-              background: showConfig ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)',
-              border: `1px solid ${showConfig ? 'rgba(34,211,238,0.3)' : 'var(--border)'}`,
-              borderRadius: 'var(--radius-sm)',
-              color: showConfig ? 'var(--accent)' : 'var(--text-secondary)',
-              display: 'flex', alignItems: 'center', gap: 6, opacity: isRunning ? 0.45 : 1,
-            }}>
+            title="Per-scan engine configuration (JSON)">
             <SlidersHorizontal size={13} /> Engine config
-            {configText.trim() && (
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
-            )}
+            {/* A dot, so a configuration left over from a previous run is
+                visible without opening the panel. */}
+            {configText.trim() && <span className="dot" style={{ background: 'var(--accent)' }} />}
           </button>
 
           {isRunning ? (
-            <button onClick={cancelScan} style={cancelBtnStyle}>
+            <button className="btn btn-danger btn-lg" onClick={cancelScan}>
               <Square size={14} /> Cancel
             </button>
           ) : (
             <button
+              className="btn btn-primary btn-lg"
               onClick={startScan}
               disabled={isRunning || !listenersReady}
               title={listenersReady ? undefined : 'Connecting to the scan engine event stream...'}
-              style={{ ...startBtnStyle, opacity: listenersReady ? 1 : 0.5, cursor: listenersReady ? 'pointer' : 'wait' }}
             >
-              <Play size={14} /> {listenersReady ? 'Launch Scan' : 'Connecting...'}
+              {listenersReady ? <Play size={14} /> : <Loader2 size={14} className="spin" />}
+              {listenersReady ? 'Launch Scan' : 'Connecting…'}
             </button>
           )}
         </div>
@@ -513,50 +522,50 @@ export function ScanConsoleScreen({
 
       {/* Auth banner */}
       {!isAuthorized && (
-        <div style={{ padding: '10px 14px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <ShieldOff size={14} /> DAST stages are disabled — complete the Authorization Gate to unlock ZAP and Nuclei.
+        <div className="callout callout-warning">
+          <ShieldOff size={14} />
+          <span>DAST stages are disabled — complete the Authorization Gate to unlock ZAP and Nuclei.</span>
         </div>
       )}
 
       {error && (
-        <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: '#fca5a5' }}>
-          {error}
-        </div>
+        <div className="callout callout-danger"><span>{error}</span></div>
       )}
 
       {/* Stage cards. Only the engines this profile runs: a card that will
           never move is worse than no card, because it reads as a stall. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+      <div className="grid grid-3">
         {visibleStages.map((s) => {
           // The native engine is gated like the external DAST ones: it makes
           // real requests to the target. The built-in *static* engines are not
           // — they read local files and reach no network the gate governs.
           const isDastLocked = s.gated && !isAuthorized;
           return (
-            <div key={s.stage} className="card" style={{
-              padding: '14px 16px',
-              opacity: isDastLocked ? 0.5 : 1,
-              borderColor: s.state === 'running' ? 'rgba(34,211,238,0.3)' : s.state === 'done' ? 'rgba(52,211,153,0.2)' : s.state === 'failed' ? 'rgba(239,68,68,0.2)' : 'var(--border)',
-              transition: 'all 0.3s',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                {STATE_ICON[s.state]}
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {STAGE_TAG[s.stageType]}
-                </span>
+            <div
+              key={s.stage}
+              className={`stage ${STAGE_STATE_CLASS[s.state]}`}
+              style={isDastLocked ? { opacity: 0.5 } : undefined}
+            >
+              {STATE_ICON[s.state]}
+              <div className="col grow" style={{ gap: 2, minWidth: 0 }}>
+                <div className="row between" style={{ gap: 'var(--s-2)' }}>
+                  <span className="stage-name truncate">{s.label}</span>
+                  <span className="badge badge-outline">{STAGE_TAG[s.stageType]}</span>
+                </div>
+                <span className="stage-state">{s.message}</span>
+                <div className="row" style={{ gap: 'var(--s-2)' }}>
+                  {s.findings > 0 && (
+                    <span className="badge badge-accent tabular">
+                      {s.findings} finding{s.findings !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {isDastLocked && (
+                    <span className="row small" style={{ gap: 4, color: 'var(--warning)' }}>
+                      <ShieldOff size={11} /> Locked
+                    </span>
+                  )}
+                </div>
               </div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 4 }}>{s.label}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.4 }}>{s.message}</div>
-              {s.findings > 0 && (
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'rgba(34,211,238,0.1)', padding: '3px 8px', borderRadius: 99, display: 'inline-block' }}>
-                  {s.findings} finding{s.findings !== 1 ? 's' : ''}
-                </div>
-              )}
-              {isDastLocked && (
-                <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ShieldOff size={11} /> Locked
-                </div>
-              )}
             </div>
           );
         })}
@@ -564,38 +573,41 @@ export function ScanConsoleScreen({
 
       {/* Totals */}
       {totalFindings > 0 && (
-        <div style={{ display: 'flex', gap: 16 }}>
-          <StatPill label="Total Findings" value={totalFindings} color="var(--accent)" />
-          <StatPill label="Critical+High" value={criticalHigh} color="var(--danger)" />
+        <div className="grid grid-2">
+          <div className="stat">
+            <span className="stat-value">{totalFindings}</span>
+            <span className="stat-label">Total findings</span>
+          </div>
+          <div className="stat stat-critical">
+            <span className="stat-value">{criticalHigh}</span>
+            <span className="stat-label">Critical + High</span>
+          </div>
         </div>
       )}
 
       {/* Log console */}
       <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 220 }}>
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: isRunning ? 'var(--success)' : 'var(--text-muted)' }} className={isRunning ? 'pulse' : ''} />
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Engine Log Stream
-          </span>
+        <div className="card-header row" style={{ gap: 'var(--s-2)' }}>
+          <span
+            className={`dot ${isRunning ? 'pulse' : ''}`}
+            style={{ background: isRunning ? 'var(--success)' : 'var(--text-muted)' }}
+          />
+          <span className="label">Engine log stream</span>
         </div>
-        <div
-          ref={logRef}
-          style={{ flex: 1, overflow: 'auto', padding: '12px 14px', fontFamily: "'JetBrains Mono', monospace", fontSize: 11, lineHeight: 1.7, color: 'var(--text-muted)' }}
-        >
+        <div ref={logRef} className="log grow" style={{ border: 'none', borderRadius: 0 }}>
           {logs.length === 0 ? (
-            <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Scan output will appear here when the engine runs...</span>
+            <span className="dim">Scan output will appear here when the engine runs…</span>
           ) : (
             logs.map((log, i) => (
-              <div key={i} style={{ marginBottom: 2 }}>
-                <span style={{ color: 'var(--text-muted)', marginRight: 8 }}>{new Date(log.timestamp).toISOString().split('T')[1].slice(0, 8)}</span>
-                <span style={{
-                  marginRight: 8, fontWeight: 700,
-                  color: log.level === 'error' ? 'var(--danger)' : log.level === 'warn' ? 'var(--warning)' : 'var(--accent)',
-                }}>
+              <div key={i} className="log-line">
+                <span className="log-time">
+                  {new Date(log.timestamp).toISOString().split('T')[1].slice(0, 8)}
+                </span>
+                <span className={LOG_LEVEL_CLASS[log.level] ?? 'log-info'} style={{ fontWeight: 700 }}>
                   [{log.level.toUpperCase()}]
                 </span>
-                <span style={{ color: 'var(--text-secondary)', marginRight: 8 }}>[{log.stage}]</span>
-                <span>{log.message}</span>
+                <span className="dim">[{log.stage}]</span>
+                <span className="grow">{log.message}</span>
               </div>
             ))
           )}
@@ -605,24 +617,4 @@ export function ScanConsoleScreen({
   );
 }
 
-function StatPill({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div style={{ padding: '8px 16px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ fontWeight: 800, fontSize: 22, color }}>{value}</span>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>{label}</span>
-    </div>
-  );
-}
 
-const startBtnStyle: React.CSSProperties = {
-  padding: '9px 20px', background: 'var(--accent)', color: '#020817',
-  border: 'none', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 13,
-  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-  boxShadow: '0 0 16px rgba(34,211,238,0.2)',
-};
-
-const cancelBtnStyle: React.CSSProperties = {
-  padding: '9px 20px', background: 'rgba(239,68,68,0.12)', color: 'var(--danger)',
-  border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 13,
-  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-};
