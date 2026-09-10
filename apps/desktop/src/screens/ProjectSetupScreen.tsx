@@ -176,56 +176,51 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
   }
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: '40px 20px' }} className="fade-in">
-      {/* Progress */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 32 }}>
+    <div className="page fade-in" style={{ maxWidth: 600, margin: '0 auto' }}>
+      {/* Progress. aria-current marks the active step for assistive technology,
+          which the bare colour change did not. */}
+      <nav className="row" style={{ marginBottom: 'var(--s-8)' }} aria-label="Setup progress">
         {[1, 2].map((s) => (
-          <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', fontSize: 12, fontWeight: 700,
-              background: step >= s ? 'var(--accent)' : 'var(--bg-elevated)',
-              color: step >= s ? 'var(--text-inverse)' : 'var(--text-muted)',
-              border: step >= s ? 'none' : '1px solid var(--border-strong)',
-              transition: 'all 0.2s',
-            }}>
+          <div key={s} className="row">
+            <span className={`step-dot ${step > s ? 'step-done' : step === s ? 'step-active' : ''}`}>
               {step > s ? <CheckCircle2 size={14} /> : s}
-            </div>
-            <span style={{ fontSize: 12, color: step >= s ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: step === s ? 600 : 400 }}>
+            </span>
+            <span
+              aria-current={step === s ? 'step' : undefined}
+              style={{
+                color: step >= s ? 'var(--text-primary)' : 'var(--text-muted)',
+                fontWeight: step === s ? 600 : 400,
+              }}
+            >
               {s === 1 ? 'Project' : 'Target & Scope'}
             </span>
             {s < 2 && <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />}
           </div>
         ))}
-      </div>
+      </nav>
 
       {step === 1 && saved.length > 0 && (
-        <div style={{ marginBottom: 28 }}>
+        <div style={{ marginBottom: 'var(--s-8)' }}>
           <SectionHeader
             icon={<History size={18} />}
             title="Resume an Engagement"
             subtitle="Saved on this machine — findings, triage decisions and the signed authorisation are all restored"
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+          <div className="col" style={{ gap: 'var(--s-2)', marginTop: 'var(--s-3)' }}>
             {saved.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => void resume(p)}
                 disabled={resuming !== null}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  gap: 12, padding: '12px 14px', textAlign: 'left',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)', cursor: resuming ? 'wait' : 'pointer',
-                  opacity: resuming && resuming !== p.id ? 0.5 : 1,
-                }}
+                className="card card-tight card-interactive between"
+                style={{ textAlign: 'left' }}
               >
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                     {p.companyName}
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  <div className="dim small" style={{ marginTop: 2 }}>
                     {p.name} · created {new Date(p.createdAt).toLocaleDateString()}
                   </div>
                 </div>
@@ -235,7 +230,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
               </button>
             ))}
           </div>
-          <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)' }}>
+          <div className="hint" style={{ marginTop: 'var(--s-5)', paddingTop: 'var(--s-5)', borderTop: '1px solid var(--border)' }}>
             Or start a new engagement below.
           </div>
         </div>
@@ -274,7 +269,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
             </Field>
 
             <Field label="Target Type" required>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              <div className="grid grid-3">
                 {TARGET_TYPES.map((t) => {
                   const Icon = TARGET_ICONS[t];
                   return (
@@ -324,7 +319,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
 
           {error && <ErrorBox msg={error} />}
 
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div className="row" style={{ gap: 'var(--s-2)' }}>
             <button type="button" onClick={() => setStep(1)} className="btn btn-lg">← Back</button>
             <SubmitButton loading={saving} label={<><Plus size={14} /> Add Target & Continue →</>} />
           </div>

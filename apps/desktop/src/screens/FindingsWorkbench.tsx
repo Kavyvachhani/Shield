@@ -456,40 +456,40 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
       </div>
 
       {/* RIGHT: Detail panel */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="col scroll grow" style={{ padding: 'var(--s-5) var(--s-6)', gap: 'var(--s-5)' }}>
         {!selected ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', textAlign: 'center' }}>
-            <div>
-              <AlertOctagon size={40} style={{ opacity: 0.2, marginBottom: 12 }} />
-              <p>Select a finding to view details,<br />evidence, and remediation guidance.</p>
-            </div>
-          </div>
+          <EmptyState icon={<AlertOctagon size={28} />} title="No finding selected">
+            Choose a row on the left to read its evidence, its priority rationale and the
+            remediation guidance that goes with it.
+          </EmptyState>
         ) : (
           <div className="fade-in">
             {/* Finding header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ flex: 1, marginRight: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                  <span className={`badge ${SEV_COLORS[selected.severity] || 'badge-info'}`}>{selected.severity}</span>
-                  {selected.cweId && <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)' }}>{selected.cweId}</span>}
+            <div className="between" style={{ alignItems: 'flex-start', marginBottom: 'var(--s-4)', paddingBottom: 'var(--s-4)', borderBottom: '1px solid var(--border)' }}>
+              <div className="grow" style={{ marginRight: 'var(--s-4)' }}>
+                <div className="row wrap" style={{ marginBottom: 'var(--s-1)' }}>
+                  <SeverityBadge severity={selected.severity} />
+                  {selected.cweId && <span className="mono small" style={{ color: 'var(--text-secondary)' }}>{selected.cweId}</span>}
                   {selected.kevListed && (
-                    <span style={{ padding: '2px 8px', borderRadius: 99, background: 'var(--danger-bg)', color: 'var(--critical)', fontSize: 10, fontWeight: 700, border: '1px solid var(--danger-border)' }}>
+                    <span className="badge badge-critical" title="Listed in CISA's Known Exploited Vulnerabilities catalogue">
                       CISA KEV
                     </span>
                   )}
                   <StatusPill status={selected.status} />
                 </div>
-                <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>{selected.title}</h3>
-                <div style={{ marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)' }}>{selected.affectedComponent}</div>
+                <h3 className="h3" style={{ fontSize: 15 }}>{selected.title}</h3>
+                <div className="mono small" style={{ marginTop: 'var(--s-1)', color: 'var(--text-secondary)' }}>{selected.affectedComponent}</div>
               </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Priority</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: selected.priorityScore >= 9 ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>{selected.priorityScore.toFixed(1)}</div>
+              <div className="stat" style={{ textAlign: 'right', flexShrink: 0, borderLeftColor: priorityColor(selected.priorityScore) }}>
+                <span className="stat-label">Priority</span>
+                <span className="stat-value" style={{ color: priorityColor(selected.priorityScore) }}>
+                  {selected.priorityScore.toFixed(1)}
+                </span>
               </div>
             </div>
 
             {/* Tags row */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <div className="row wrap" style={{ marginBottom: 'var(--s-4)' }}>
               {selected.owasp2025 && <Tag label={selected.owasp2025} color="purple" />}
               {selected.wstgId && <Tag label={selected.wstgId} color="cyan" />}
               {selected.sourceTools.map(t => <Tag key={t} label={t} color="slate" />)}
@@ -497,27 +497,27 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
             {/* Scoring breakdown */}
             <DetailSection title="Priority Scoring">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+              <div className="grid grid-3" style={{ marginBottom: 'var(--s-2)' }}>
                 <ScoreCard label="CVSS 4.0" value={selected.cvss4Score?.toFixed(1) ?? '—'} />
                 <ScoreCard label="EPSS" value={selected.epssScore ? `${(selected.epssScore * 100).toFixed(1)}%` : '—'} />
                 <ScoreCard label="KEV" value={selected.kevListed ? 'YES ⚡' : 'No'} highlight={selected.kevListed} />
               </div>
               {selected.priorityRationale && (
-                <div style={{ padding: '10px 12px', background: 'var(--accent-soft)', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--accent)', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
-                  💡 <strong>Rationale:</strong> {selected.priorityRationale}
+                <div className="callout callout-info mono">
+                  <span><strong>Rationale:</strong> {selected.priorityRationale}</span>
                 </div>
               )}
             </DetailSection>
 
             {/* Description */}
             <DetailSection title="Technical Description">
-              <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{selected.description}</p>
+              <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>{selected.description}</p>
             </DetailSection>
 
             {/* Repro steps */}
             {selected.reproSteps.length > 0 && (
               <DetailSection title="Reproduction Steps">
-                <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px 14px', fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
+                <div className="code">
                   {selected.reproSteps.map((s, i) => <div key={i}>{s}</div>)}
                 </div>
               </DetailSection>
@@ -525,8 +525,8 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
             {/* Remediation */}
             <DetailSection title="Remediation Guidance">
-              <div style={{ padding: '12px 14px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--success)', lineHeight: 1.6 }}>
-                {selected.remediation}
+              <div className="callout callout-success">
+                <span>{selected.remediation}</span>
               </div>
             </DetailSection>
 
@@ -535,25 +535,25 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             {selected.evidenceCount > 0 && (
               <DetailSection title={`Evidence (${selected.evidenceCount}, sanitized)`}>
                 {evidenceFor !== selected.id ? (
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading evidence…</div>
+                  <div className="row dim"><Spinner size={13} /> Loading evidence…</div>
                 ) : evidences.length === 0 ? (
-                  <div style={{ fontSize: 11, color: 'var(--warning)', lineHeight: 1.6 }}>
+                  <Callout tone="warning">
                     This finding records {selected.evidenceCount} artefact
                     {selected.evidenceCount === 1 ? '' : 's'}, but they could not be loaded.
                     Verify by hand before triaging.
-                  </div>
+                  </Callout>
                 ) : (
                   evidences.map((e, i) => (
-                    <div key={i} style={{ marginBottom: 10 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>{e.title}</span>
-                        <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>{e.evidenceType}</span>
+                    <div key={i} style={{ marginBottom: 'var(--s-2)' }}>
+                      <div className="between" style={{ alignItems: 'baseline', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{e.title}</span>
+                        <span className="mono dim small">{e.evidenceType}</span>
                       </div>
-                      <pre style={{ margin: 0, padding: '10px 12px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 10.5, lineHeight: 1.6, color: 'var(--text-secondary)', fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflow: 'auto' }}>
+                      <pre className="code" style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260 }}>
                         {e.content}
                       </pre>
                       {e.hash && (
-                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, fontFamily: "'JetBrains Mono', monospace" }}>
+                        <div className="mono dim small" style={{ marginTop: 3 }}>
                           SHA-256 {e.hash.slice(0, 32)}
                         </div>
                       )}
@@ -571,16 +571,15 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
             {/* Triage panel */}
             <DetailSection title="Triage & Status Override">
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              <div className="row wrap" style={{ marginBottom: 'var(--s-2)' }}>
                 {STATUSES.map(s => (
-                  <button key={s} type="button" onClick={() => setTriageStatus(s)} style={{
-                    padding: '5px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600,
-                    cursor: 'pointer', border: '1px solid',
-                    borderColor: triageStatus === s ? 'var(--accent)' : 'var(--border)',
-                    background: triageStatus === s ? 'var(--accent-soft)' : 'var(--bg-elevated)',
-                    color: triageStatus === s ? 'var(--accent)' : 'var(--text-muted)',
-                    transition: 'all 0.12s',
-                  }}>
+                  <button
+                    key={s}
+                    type="button"
+                    className="btn btn-sm"
+                    aria-pressed={triageStatus === s}
+                    onClick={() => setTriageStatus(s)}
+                  >
                     {s}
                   </button>
                 ))}
@@ -588,7 +587,9 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
               <input
                 value={analystName} onChange={(e) => setAnalystName(e.target.value)}
                 placeholder="Analyst name (required)"
-                style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
+                className="input"
+                aria-label="Analyst name"
+                style={{ marginBottom: 'var(--s-2)' }}
               />
               <textarea
                 value={triageNote} onChange={(e) => setTriageNote(e.target.value)}
@@ -596,19 +597,20 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                   ? 'Justification (required — printed in the report and kept for audit)'
                   : 'Triage rationale (required — written to audit trail)'}
                 rows={3}
-                style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+                className="textarea"
+                aria-label="Triage rationale"
               />
 
               {triageStatus === 'Accepted Risk' && (
                 <div style={{ marginTop: 8 }}>
-                  <label style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+                  <label className="label row" style={{ gap: 5 }}>
                     <CalendarClock size={11} /> Review date (optional)
                   </label>
                   <input
                     type="date" value={reviewDate} onChange={(e) => setReviewDate(e.target.value)}
-                    style={{ padding: '7px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
+                    className="input"
                   />
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.5 }}>
+                  <div className="hint">
                     On this date the acceptance lapses and the weakness returns to the open list.
                     Leave it blank for an acceptance that stands until you withdraw it.
                   </div>
@@ -616,7 +618,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
               )}
 
               {recordsException && (
-                <div style={{ marginTop: 10, padding: '9px 11px', background: 'var(--info-bg)', border: '1px solid var(--info-border)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <div className="callout callout-info" style={{ marginTop: 'var(--s-2)' }}>
                   <strong>This carries forward.</strong>{' '}
                   {triageStatus === 'False Positive'
                     ? 'The finding is removed from every report, and the same dismissal is applied to every later scan of this target — you will not be asked about it again.'
@@ -624,16 +626,18 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 </div>
               )}
 
-              {triageError && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{triageError}</div>}
+              {triageError && <div className="error-text">{triageError}</div>}
               {triageEffect && (
-                <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 8, padding: '8px 10px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
-                  {triageEffect}
+                <div className="callout callout-success" style={{ marginTop: 'var(--s-2)' }}>
+                  <span>{triageEffect}</span>
                 </div>
               )}
               <button
                 onClick={submitTriage} disabled={triaging}
-                style={{ marginTop: 10, padding: '8px 20px', background: 'var(--accent-soft)', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Flag size={13} /> {triaging ? 'Saving...' : 'Save Triage Decision'}
+                className="btn btn-primary"
+                style={{ marginTop: 'var(--s-2)' }}>
+                {triaging ? <Spinner size={13} /> : <Flag size={13} />}
+                {triaging ? 'Saving…' : 'Save triage decision'}
               </button>
             </DetailSection>
           </div>
@@ -711,28 +715,31 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: readonly string[] }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)}
-      style={{ padding: '6px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: value ? 'var(--text-primary)' : 'var(--text-muted)', fontSize: 12, outline: 'none', cursor: 'pointer' }}>
+    <select
+      className="select"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={label}
+      style={value ? undefined : { color: 'var(--text-muted)' }}
+    >
       <option value="">{label}: All</option>
       {options.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
   );
 }
 
+/** Triage status as one of the shared badge variants, so a status reads the
+ *  same weight here as a severity does beside it. */
+const STATUS_BADGE: Record<string, string> = {
+  'Open': 'badge-critical',
+  'In Progress': 'badge-medium',
+  'Remediated': 'badge-low',
+  'Accepted Risk': 'badge-info',
+  'False Positive': 'badge-outline',
+};
+
 function StatusPill({ status }: { status: string }) {
-  const colors: Record<string, { bg: string; color: string }> = {
-    'Open': { bg: 'var(--danger-bg)', color: 'var(--critical)' },
-    'In Progress': { bg: 'var(--warning-bg)', color: 'var(--medium)' },
-    'Remediated': { bg: 'var(--success-bg)', color: 'var(--low)' },
-    'Accepted Risk': { bg: 'var(--info-bg)', color: 'var(--info)' },
-    'False Positive': { bg: 'var(--info-bg)', color: 'var(--text-muted)' },
-  };
-  const c = colors[status] ?? colors['Open'];
-  return (
-    <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: c.bg, color: c.color }}>
-      {status}
-    </span>
-  );
+  return <span className={`badge ${STATUS_BADGE[status] ?? 'badge-critical'}`}>{status}</span>;
 }
 
 /**
@@ -786,29 +793,27 @@ function ConfidencePanel({ finding }: { finding: Finding }) {
 
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 10 }}>{title}</div>
+    <section style={{ marginBottom: 'var(--s-4)' }}>
+      <h4 className="label" style={{ marginBottom: 'var(--s-2)' }}>{title}</h4>
       {children}
-    </div>
+    </section>
   );
 }
 
-function Tag({ label, color }: { label: string; color: string }) {
-  const c = color === 'purple' ? { bg: 'var(--purple-soft)', border: 'var(--purple-border)', text: 'var(--purple)' }
-           : color === 'cyan'   ? { bg: 'var(--accent-soft)', border: 'var(--accent-border)', text: 'var(--accent)' }
-           : { bg: 'var(--info-bg)', border: 'var(--info-border)', text: 'var(--info)' };
-  return (
-    <span style={{ padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: c.bg, border: `1px solid ${c.border}`, color: c.text }}>
-      {label}
-    </span>
-  );
+/** A taxonomy chip — OWASP category, WSTG reference, or the tool that found it. */
+function Tag({ label, color }: { label: string; color: 'purple' | 'cyan' | 'slate' }) {
+  const tone =
+    color === 'purple' ? { background: 'var(--purple-soft)', borderColor: 'var(--purple-border)', color: 'var(--purple)' }
+    : color === 'cyan' ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent)' }
+    : undefined; // slate is the badge's own default
+  return <span className="badge badge-outline" style={tone}>{label}</span>;
 }
 
 function ScoreCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: `1px solid ${highlight ? 'var(--danger-border)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 800, color: highlight ? 'var(--danger)' : 'var(--text-primary)' }}>{value}</div>
+    <div className={`stat ${highlight ? 'stat-critical' : ''}`} style={{ textAlign: 'center' }}>
+      <span className="stat-label">{label}</span>
+      <span className="stat-value" style={{ fontSize: 18 }}>{value}</span>
     </div>
   );
 }

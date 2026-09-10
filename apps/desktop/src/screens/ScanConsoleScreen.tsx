@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles } from 'lucide-react';
 import type {
   Target, AuthorizationRecord, ScanLogPayload, ScanProfile, ScanStage, StageState,
+  EngineDescriptor,
 } from '../types';
 import { api, events } from '../lib/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -62,25 +63,36 @@ const LOG_LEVEL_CLASS: Record<string, string> = {
   done: 'log-done',
 };
 
-const STAGE_DEFS: StageStatus[] = [
-  { stage: 'code',           label: 'Sentinel Code',           stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'dependencies',   label: 'Sentinel Dependencies',   stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'secrets',        label: 'Sentinel Secrets',        stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'infrastructure', label: 'Sentinel Infrastructure', stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'recon',          label: 'Passive recon',           stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'osv',         label: 'OSV-Scanner SCA',    stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'trufflehog',  label: 'TruffleHog Verified',stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'retirejs',    label: 'retire.js Libraries',stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'checkov',     label: 'Checkov IaC',        stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', gated: true, state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'nikto_dast',  label: 'Nikto Web Server',   stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'testssl_dast',label: 'testssl.sh TLS',     stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
-];
+/**
+ * Build the console's stage list from the engine list the backend serves.
+ *
+ * This was a hardcoded table carrying the comment "must stay in step with
+ * BASELINE_STAGES / DAST_STAGES in commands/scan.rs" — the same drift the Rust
+ * side is now guarded against, except across a boundary no test can reach. It
+ * fails silently in both directions: an engine the pipeline runs but this list
+ * omits emits stage, log and completion events matching no row, so its progress
+ * and its failures are equally invisible; and a row here for a stage the
+ * pipeline does not run sits on "Waiting…" for the whole scan, which reads as a
+ * hang. The native engine was invisible this way once already.
+ *
+ * `list_engines` is derived from ALL_STAGES, which the Rust tests now hold equal
+ * to what the pipeline actually runs. Deriving from it makes this console
+ * correct by construction rather than by remembering to edit two files.
+ */
+function stageFromEngine(e: EngineDescriptor): StageStatus {
+  return {
+    stage: e.stage as ScanStage,
+    label: e.label,
+    // Built-in is about where the engine comes from; gated is about whether it
+    // reaches the target. Sentinel Native is both, and the tag should say the
+    // former while the lock follows the latter.
+    stageType: e.builtIn ? 'builtin' : e.reachesTarget ? 'dast' : 'static',
+    gated: e.reachesTarget,
+    state: 'pending',
+    findings: 0,
+    message: e.reachesTarget ? 'Requires signed RoE' : 'Waiting…',
+  };
+}
 
 // How long to wait for the first engine event before warning. The pipeline
 // emits its first log line immediately on spawn, so silence past this point
@@ -153,7 +165,8 @@ const STATE_ICON: Record<StageState, React.ReactNode> = {
 export function ScanConsoleScreen({
   target, authRecord, profile, onChooseProfile, onScanComplete,
 }: Props) {
-  const [stages, setStages] = useState<StageStatus[]>(STAGE_DEFS);
+  const [stages, setStages] = useState<StageStatus[]>([]);
+  const [enginesError, setEnginesError] = useState('');
   // A card for an engine the profile has switched off would sit on "Waiting…"
   // for the whole run, which reads as a stalled stage rather than an excluded
   // one. With no profile chosen everything runs, so everything is shown.
@@ -227,6 +240,25 @@ export function ScanConsoleScreen({
   // and blamed the silence on a stray second instance twenty seconds later.
   // A subscription that cannot be established is a hard failure and now says
   // so immediately, before any scan is launched.
+  // Load the engine list once. A failure here is worth surfacing rather than
+  // rendering an empty grid: no cards beside a working Launch button looks like
+  // a scan with nothing to run, which is indistinguishable from a scan that ran
+  // and found nothing.
+  useEffect(() => {
+    let active = true;
+    api.listEngines()
+      .then((engines) => {
+        if (!active) return;
+        setStages(engines.map(stageFromEngine));
+        setEnginesError('');
+      })
+      .catch((err) => {
+        if (!active) return;
+        setEnginesError(String(err));
+      });
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let unlisteners: UnlistenFn[] = [];
@@ -329,7 +361,12 @@ export function ScanConsoleScreen({
     setConfigError('');
     setError('');
     setLogs([]);
-    setStages(STAGE_DEFS.map(s => ({ ...s, state: 'pending', findings: 0, message: s.stageType !== 'static' && !isAuthorized ? 'Requires signed RoE' : 'Waiting...' })));
+    setStages(prev => prev.map(s => ({
+      ...s,
+      state: 'pending',
+      findings: 0,
+      message: s.gated && !isAuthorized ? 'Requires signed RoE' : 'Waiting…',
+    })));
     setTotalFindings(0);
     setCriticalHigh(0);
     setIsRunning(true);
@@ -530,6 +567,15 @@ export function ScanConsoleScreen({
 
       {error && (
         <div className="callout callout-danger"><span>{error}</span></div>
+      )}
+
+      {enginesError && (
+        <div className="callout callout-danger">
+          <span>
+            The engine list could not be loaded, so this console cannot show what a scan
+            will run: {enginesError}
+          </span>
+        </div>
       )}
 
       {/* Stage cards. Only the engines this profile runs: a card that will

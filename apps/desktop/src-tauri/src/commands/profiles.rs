@@ -529,6 +529,50 @@ mod tests {
         }
     }
 
+    /// The scan console builds its stage cards from this list, mapping
+    /// `built_in` to the tag it shows and `reaches_target` to whether the card
+    /// renders locked behind the authorisation gate. It used to hold its own
+    /// copy of that table, which is how the native engine once rendered as
+    /// though it were doing nothing.
+    ///
+    /// Two properties the console depends on, neither obvious:
+    ///
+    /// * `built_in` and `reaches_target` are independent. Sentinel Native is
+    ///   both — compiled in, and it sends requests — so a UI that derived one
+    ///   from the other would either tag it as an external tool or leave a live
+    ///   engine unlocked.
+    /// * Every stage the console can be asked to draw a card for appears here,
+    ///   because a card is only drawn for a descriptor this returns.
+    #[test]
+    fn the_engine_list_carries_what_the_console_needs_to_draw_a_stage_card() {
+        let engines = list_engines();
+        assert_eq!(engines.len(), ALL_STAGES.len());
+
+        for e in &engines {
+            assert!(!e.label.trim().is_empty(), "{} has no label to show", e.stage);
+            assert_eq!(
+                e.reaches_target,
+                LIVE_STAGES.contains(&e.stage.as_str()),
+                "{} disagrees with LIVE_STAGES about whether it reaches the target, \
+                 which decides whether the console locks its card",
+                e.stage
+            );
+        }
+
+        let native = engines.iter().find(|e| e.stage == "native").expect("the native engine");
+        assert!(
+            native.built_in && native.reaches_target,
+            "the native engine is compiled in *and* sends traffic; collapsing those two \
+             into one flag mislabels it or leaves it ungated"
+        );
+
+        let zap = engines.iter().find(|e| e.stage == "zap_dast").expect("the ZAP engine");
+        assert!(!zap.built_in && zap.reaches_target, "ZAP is an external live engine");
+
+        let code = engines.iter().find(|e| e.stage == "code").expect("the code engine");
+        assert!(code.built_in && !code.reaches_target, "the code engine reads local files only");
+    }
+
     #[test]
     fn the_built_in_engines_are_exactly_the_ones_that_need_no_binary() {
         for e in list_engines() {
