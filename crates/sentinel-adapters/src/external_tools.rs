@@ -414,6 +414,85 @@ impl ScannerAdapter for CheckovAdapter {
     }
 }
 
+// ── sqlmap ───────────────────────────────────────────────────────────────────
+
+/// Confirmation of SQL injection by exploitation.
+///
+/// Every other engine here reports SQLi as a *possibility* — a query built from
+/// input, a response that changed under a probe. sqlmap answers whether the
+/// possibility is real by injecting the parameter and reading the result back,
+/// which is the difference between a finding a client can dispute and one they
+/// cannot. It reaches the target and mutates the queries the application runs,
+/// so it sits behind the RoE gate like every other live engine.
+///
+/// Run deliberately conservatively. `--batch` makes it non-interactive (it
+/// never waits at a prompt), and it is given no `--dump`, no `--os-shell`, and
+/// no `--file-read`: the goal is to *confirm* the injection, not to exfiltrate
+/// data or reach the host, both of which the Rules of Engagement forbid. The
+/// RoE request rate becomes sqlmap's inter-request `--delay`.
+pub struct SqlmapAdapter;
+
+#[async_trait]
+impl ScannerAdapter for SqlmapAdapter {
+    fn name(&self) -> &'static str {
+        "sqlmap"
+    }
+
+    async fn healthcheck(&self) -> Result<bool> {
+        Ok(LocalCliRunner::is_installed("sqlmap"))
+    }
+
+    async fn run(&self, target: &Target, config_json: &str) -> Result<Vec<Finding>> {
+        let cfg = DastConfig::from_json(config_json)?;
+        let base_url = target.base_url.trim();
+        if base_url.is_empty() {
+            return Err(anyhow!("sqlmap needs a target URL"));
+        }
+
+        // The RoE rate ceiling, expressed as the pause sqlmap takes between
+        // requests. Rounded up: exceeding the agreed rate is the one direction
+        // that is never acceptable.
+        let rps = cfg.rate_limit_rps.max(1);
+        let delay = (1.0_f64 / rps as f64).ceil().max(0.0) as u64;
+
+        let args = vec![
+            "-u".to_string(),
+            base_url.to_string(),
+            // Never wait for a human; take the safe default at every prompt.
+            "--batch".to_string(),
+            // Confirm, do not exfiltrate. No --dump, --os-shell or --file-read:
+            // those are the data-exfiltrating and host-reaching actions the RoE
+            // rules out, and their absence is what keeps this within scope.
+            "--level=2".to_string(),
+            "--risk=1".to_string(),
+            "--technique=BEUST".to_string(),
+            "--delay".to_string(),
+            delay.to_string(),
+            "--timeout".to_string(),
+            "15".to_string(),
+            // A ceiling on total run time, below the tool timeout so a slow
+            // target is reported as sqlmap giving up rather than the stage
+            // wedging.
+            "--time-sec".to_string(),
+            "5".to_string(),
+            "--flush-session".to_string(),
+            "--disable-coloring".to_string(),
+        ];
+
+        let Some(output) = run_tool("sqlmap", &args).await? else {
+            return Ok(vec![]);
+        };
+
+        sentinel_core::parser::sqlmap::SqlmapParser::parse(
+            &output,
+            base_url,
+            target.id,
+            Uuid::new_v4(),
+        )
+        .context("sqlmap output could not be parsed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +530,7 @@ mod tests {
             NiktoAdapter.healthcheck().await,
             TestSslAdapter.healthcheck().await,
             CheckovAdapter.healthcheck().await,
+            SqlmapAdapter.healthcheck().await,
         ] {
             assert!(ok.is_ok());
         }

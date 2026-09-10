@@ -34,7 +34,7 @@ pub const ALL_STAGES: &[&str] = &[
     // target, so it is not gated.
     "recon",
     // Live engines — every one of these is behind the RoE gate.
-    "native", "zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast",
+    "native", "zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast", "sqlmap_dast",
 ];
 
 /// Stages that read local files only.
@@ -46,7 +46,7 @@ pub const STATIC_STAGES: &[&str] = &[
 
 /// Stages that issue requests to the target, and are therefore gated.
 pub const LIVE_STAGES: &[&str] = &[
-    "native", "zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast",
+    "native", "zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast", "sqlmap_dast",
 ];
 
 /// Stages that need no installed binary.
@@ -400,6 +400,7 @@ fn descriptor(stage: &str) -> EngineDescriptor {
         "nuclei_dast" => ("Nuclei", "Community template matching for known vulnerable software and exposures.", Some("nuclei")),
         "nikto_dast" => ("Nikto", "Web server misconfiguration and forgotten-file discovery.", Some("nikto")),
         "testssl_dast" => ("testssl.sh", "Deep TLS assessment: what the server will actually negotiate, not just what its certificate says.", Some("testssl.sh")),
+        "sqlmap_dast" => ("sqlmap", "Confirms SQL injection by exploiting it — turns a suspected injection into a demonstrated one, with the backend fingerprinted. Never dumps data or reaches the host; confirmation only.", Some("sqlmap")),
         other => (other, "No description available for this engine.", None),
     };
 

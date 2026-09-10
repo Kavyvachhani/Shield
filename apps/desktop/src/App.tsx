@@ -64,6 +64,11 @@ function Shell() {
   const [authRecord, setAuthRecord] = useState<AuthorizationRecord | null>(null);
   const [scanRunId, setScanRunId] = useState<string | null>(null);
   const [profile, setProfile] = useState<ScanProfile | null>(null);
+  // Where to return after the profiles screen, when it was opened to pick a
+  // profile for a scan rather than browsed from the sidebar. Without this the
+  // "Choose a profile" button on the console was a one-way trip: selecting a
+  // profile set the state but left you on the profiles screen with no way back.
+  const [profilesReturnTo, setProfilesReturnTo] = useState<Screen | null>(null);
   const [theme, toggleTheme] = useTheme();
 
   // Read from the bundle rather than hardcoded. A literal here went stale
@@ -199,7 +204,7 @@ function Shell() {
                     className={`nav-item ${screen === id ? 'nav-item-active' : ''}`}
                     disabled={!!blocked}
                     title={blocked ?? label}
-                    onClick={() => !blocked && setScreen(id)}
+                    onClick={() => { if (!blocked) { if (id !== 'profiles') setProfilesReturnTo(null); setScreen(id); } }}
                   >
                     <Icon size={15} />
                     {label}
@@ -244,7 +249,22 @@ function Shell() {
           {screen === 'profiles' && (
             <ScanProfilesScreen
               selectedId={profile?.id ?? null}
-              onSelect={setProfile}
+              onSelect={(p) => {
+                setProfile(p);
+                // Picked for a scan: hand control back to where the choice was
+                // requested from.
+                if (profilesReturnTo) {
+                  const to = profilesReturnTo;
+                  setProfilesReturnTo(null);
+                  setScreen(to);
+                }
+              }}
+              returnLabel={profilesReturnTo ? 'Back to scan' : null}
+              onBack={profilesReturnTo ? () => {
+                const to = profilesReturnTo;
+                setProfilesReturnTo(null);
+                setScreen(to);
+              } : null}
             />
           )}
 
@@ -253,7 +273,7 @@ function Shell() {
               target={target}
               authRecord={authRecord}
               profile={profile}
-              onChooseProfile={() => setScreen('profiles')}
+              onChooseProfile={() => { setProfilesReturnTo('console'); setScreen('profiles'); }}
               onScanComplete={(id) => {
                 setScanRunId(id);
                 setScreen('findings');

@@ -6,6 +6,7 @@ pub mod nikto;
 pub mod testssl;
 pub mod checkov;
 pub mod sarif;
+pub mod sqlmap;
 pub mod semgrep;
 pub mod trivy;
 pub mod gitleaks;

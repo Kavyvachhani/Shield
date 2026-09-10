@@ -57,6 +57,9 @@ pub mod engine {
     /// Infrastructure-as-code misconfiguration — what the app is deployed onto.
     pub const CHECKOV: &str = "Checkov";
 
+    /// sqlmap confirms SQL injection by exploiting it.
+    pub const SQLMAP: &str = "sqlmap";
+
     // ── Built-in static engines ──────────────────────────────────────────────
     //
     // These ship inside the application, so unlike every engine above them they
@@ -146,6 +149,9 @@ const E_ZAP_NUCLEI: &[&str] = &[engine::ZAP, engine::NUCLEI];
 const E_ZAP_SEMGREP: &[&str] = &[engine::ZAP, engine::CODE, engine::SEMGREP];
 const E_SEMGREP: &[&str] = &[engine::CODE, engine::SEMGREP];
 const E_SEMGREP_ZAP_NUCLEI: &[&str] = &[engine::CODE, engine::SEMGREP, engine::ZAP, engine::NUCLEI];
+/// The SQL-injection line-up: the static and DAST engines that flag it, plus
+/// sqlmap, which confirms it by exploitation.
+const E_SQLI: &[&str] = &[engine::CODE, engine::SEMGREP, engine::ZAP, engine::NUCLEI, engine::SQLMAP];
 /// Two independent vulnerability databases. A CVE both report is a stronger
 /// claim than one either reports alone, and dedup raises reachability when it
 /// sees two engines confirm the same weakness.
@@ -570,7 +576,7 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-INPV-05", category_code: "INPV", category: "Input Validation",
         name: "Testing for SQL Injection",
-        coverage: Partial, engines: E_SEMGREP_ZAP_NUCLEI, owasp_2025: A05, cwe: "CWE-89",
+        coverage: Partial, engines: E_SQLI, owasp_2025: A05, cwe: "CWE-89",
         client_summary: "Attempt to manipulate database queries through user input.",
     },
     ChecklistItem {

@@ -54,11 +54,16 @@ a single priority ranking, and reports written for the two audiences that actual
   links-per-page so an unbounded URL space cannot stall a scan. Findings that describe the
   deployment rather than a page — a missing header, a cookie flag — collapse to one entry
   listing every affected URL, instead of one identical row per page.
-- **Extends with what you have.** Eleven external engines are detected automatically on
+- **Extends with what you have.** Twelve external engines are detected automatically on
   `PATH` and in the conventional install locations — Semgrep, Trivy, OSV-Scanner,
-  Gitleaks, TruffleHog, retire.js, Checkov, OWASP ZAP, Nuclei, Nikto and testssl.sh.
-  Missing engines are skipped with an explanation rather than failing the run, and the
-  coverage matrix records which checks went unanswered as a result.
+  Gitleaks, TruffleHog, retire.js, Checkov, OWASP ZAP, Nuclei, Nikto, testssl.sh and
+  sqlmap. Missing engines are skipped with an explanation rather than failing the run,
+  and the coverage matrix records which checks went unanswered as a result.
+  sqlmap is the confirmation engine for SQL injection: where the static rules and the
+  DAST scanners flag a *suspected* injection, sqlmap injects the parameter and reads the
+  result back, turning a lead a client can dispute into a demonstrated flaw. It is run
+  strictly to confirm — never with `--dump`, `--os-shell` or `--file-read` — so it stays
+  inside the same non-destructive guarantee as the rest of the pipeline.
 - **Takes results from anything that speaks SARIF.** CodeQL, Snyk, Checkmarx, Grype, ESLint
   and GitHub code scanning all emit it, so the tool is not limited to the engines it ships
   adapters for. Imported findings go through the identical path as scanned ones — scored,

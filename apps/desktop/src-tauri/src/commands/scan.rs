@@ -73,7 +73,7 @@ const STATIC_STAGES: usize = 12;
 const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Stages added when the analyst opts into active DAST.
-const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast"];
+const DAST_STAGES: &[&str] = &["zap_dast", "nuclei_dast", "nikto_dast", "testssl_dast", "sqlmap_dast"];
 
 /// Running totals a pipeline accumulates as its stages report.
 ///
@@ -630,6 +630,9 @@ async fn run_stage_for(
         // other engine that does.
         "nikto_dast"  => AuthGatedDastRunner::new(sentinel_adapters::external_tools::NiktoAdapter).run(target, config_json).await,
         "testssl_dast" => AuthGatedDastRunner::new(sentinel_adapters::external_tools::TestSslAdapter).run(target, config_json).await,
+        // sqlmap confirms SQL injection by exploiting it, so it reaches the
+        // target and is gated like the rest.
+        "sqlmap_dast" => AuthGatedDastRunner::new(sentinel_adapters::external_tools::SqlmapAdapter).run(target, config_json).await,
         other => Err(anyhow::anyhow!("Unknown stage: {}", other)),
     }
 }
@@ -848,6 +851,7 @@ fn engine_name(stage: &str) -> &'static str {
         "nuclei_dast" => "Nuclei",
         "nikto_dast" => "Nikto",
         "testssl_dast" => "testssl.sh",
+        "sqlmap_dast" => "sqlmap",
         _ => "Unknown",
     }
 }
@@ -882,6 +886,7 @@ fn engine_label(stage: &str) -> &'static str {
         "nuclei_dast" => "Nuclei DAST",
         "nikto_dast" => "Nikto web server scan",
         "testssl_dast" => "testssl.sh TLS assessment",
+        "sqlmap_dast" => "sqlmap SQL injection confirmation",
         _ => "Unknown stage",
     }
 }

@@ -1,7 +1,7 @@
 /**
  * Saved scan configurations.
  *
- * Configuring a scan means deciding which of sixteen engines to run, how hard
+ * Configuring a scan means deciding which engines to run, how hard
  * to crawl, and how fast to send requests. Those decisions are not per-target —
  * they are per kind of work — and making them from scratch every time is how an
  * analyst ends up leaving dynamic testing off by accident on the run that
@@ -9,12 +9,12 @@
  *
  * Six profiles ship built in and are read-only. The editor starts from whichever
  * one is selected, so "Full assessment but without ZAP" is two clicks and a
- * name rather than sixteen checkboxes from nothing.
+ * name rather than a wall of checkboxes from nothing.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, Check, Copy, FileCog, Globe, HardDrive, Lock, Plus, Save,
+  AlertTriangle, ArrowLeft, Check, Copy, FileCog, Globe, HardDrive, Lock, Plus, Save,
   Server, Trash2,
 } from 'lucide-react';
 import type { EngineDescriptor, ScanProfile } from '../types';
@@ -25,6 +25,11 @@ interface Props {
   /** The profile currently chosen for the next scan, if any. */
   selectedId: string | null;
   onSelect: (profile: ScanProfile) => void;
+  /** Label for the back control, when this screen was opened to pick a profile
+   *  for a scan. Null when browsed from the sidebar, where there is nowhere to
+   *  go back to. */
+  returnLabel?: string | null;
+  onBack?: (() => void) | null;
 }
 
 const CATEGORY_LABEL: Record<EngineDescriptor['category'], string> = {
@@ -39,7 +44,7 @@ const CATEGORY_ICON: Record<EngineDescriptor['category'], typeof Server> = {
   live: Globe,
 };
 
-export function ScanProfilesScreen({ selectedId, onSelect }: Props) {
+export function ScanProfilesScreen({ selectedId, onSelect, returnLabel, onBack }: Props) {
   const toast = useToast();
   const [profiles, setProfiles] = useState<ScanProfile[]>([]);
   const [engines, setEngines] = useState<EngineDescriptor[]>([]);
@@ -121,12 +126,18 @@ export function ScanProfilesScreen({ selectedId, onSelect }: Props) {
 
   return (
     <div className="page stack">
-      <div className="between">
-        <div>
+      {onBack && (
+        <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ alignSelf: 'flex-start' }}>
+          <ArrowLeft size={14} /> {returnLabel ?? 'Back'}
+        </button>
+      )}
+      <div className="between wrap">
+        <div style={{ minWidth: 0 }}>
           <h1 className="h1">Scan profiles</h1>
           <p className="muted small">
-            A named set of engines and settings. Pick one on the scan console instead of
-            re-deciding sixteen switches every run.
+            A named set of engines and settings. {onBack
+              ? 'Pick one to use it for this scan.'
+              : `Pick one on the scan console instead of re-deciding all ${engines.length} switches every run.`}
           </p>
         </div>
         <button className="btn btn-primary" onClick={startNew}>
@@ -183,8 +194,8 @@ export function ScanProfilesScreen({ selectedId, onSelect }: Props) {
                 )}
               </div>
 
-              <div className="between">
-                <span className="dim small">
+              <div className="between wrap" style={{ gap: 'var(--s-2)' }}>
+                <span className="dim small" style={{ flex: '1 1 auto' }}>
                   {profile.runDast && live > 0 ? (
                     <>
                       <AlertTriangle size={11} style={{ verticalAlign: -1 }} /> Sends requests to
