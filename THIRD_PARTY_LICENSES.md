@@ -1,6 +1,8 @@
 # SentinelVAPT — Third-Party Open Source Software Licenses
 
-All dependencies bundled or referenced by SentinelVAPT use permissive open-source licenses (MIT, Apache-2.0, BSD-3-Clause, ISC). No GPL, AGPL, or copyleft component is included.
+All dependencies bundled or referenced by SentinelVAPT use permissive open-source licenses (MIT, Apache-2.0, BSD-3-Clause, ISC, SIL OFL-1.1). No GPL, AGPL, or copyleft component is included.
+
+The OFL applies to the two bundled typefaces. It is a permissive licence for fonts rather than a copyleft one: it permits bundling and redistribution inside a larger work, and its conditions — that the licence travel with the font, that the fonts not be sold on their own, and that a *modified* font not reuse the reserved name — are all met here, since the files are unmodified and shipped with their licences.
 
 Versions below reflect the resolved versions in `Cargo.lock` and `apps/desktop/package-lock.json` for release 0.2.1.
 
@@ -51,6 +53,20 @@ bundled or redistributed with the application, and each remains under its own li
 | Gitleaks | MIT |
 | OWASP ZAP | Apache-2.0 |
 | Nuclei | MIT |
+
+---
+
+## Bundled Fonts
+
+Vendored into the application bundle rather than fetched from a CDN, so the
+interface renders in its own typeface with no network access and no third party
+is told when the application starts. Files live in
+`apps/desktop/src/assets/fonts/`, with each licence beside them.
+
+| Font | Version | License | Description |
+|---|---|---|---|
+| Inter | v20 (variable, latin + latin-ext) | SIL OFL-1.1 | Interface typeface. Copyright (c) 2016 The Inter Project Authors |
+| JetBrains Mono | v24 (variable, latin + latin-ext) | SIL OFL-1.1 | Monospace, for evidence blocks, logs and identifiers. Copyright 2020 The JetBrains Mono Project Authors |
 
 ---
 

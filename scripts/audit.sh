@@ -76,12 +76,50 @@ fi
 
 section "Remote assets loaded at runtime"
 # An application that describes itself as offline-capable must not fetch anything
-# to render its own interface.
-if grep -rn "@import url('https://\|@import url(\"https://" apps/desktop/src --include='*.css' 2>/dev/null; then
-  bad "a stylesheet is imported from a remote origin"
+# to render its own interface. Covers both @import and any url() — a webfont
+# pulled from a CDN is the same disclosure whichever syntax reaches it.
+if grep -rnE "@import +url\(['\"]?https?:|url\(['\"]?https?://" apps/desktop/src --include='*.css' 2>/dev/null; then
+  bad "a stylesheet fetches something from a remote origin"
 else
-  ok "no remote stylesheets or webfonts"
+  ok "no remote stylesheets or webfonts in source"
 fi
+
+# And the same again on what actually shipped, since the check above only sees
+# what was written rather than what the bundler emitted.
+if [[ -d apps/desktop/dist ]]; then
+  if grep -rohE "url\(https?://[^)]*\)" apps/desktop/dist/assets/*.css 2>/dev/null | grep -q .; then
+    grep -rohE "url\(https?://[^)]*\)" apps/desktop/dist/assets/*.css | sort -u | sed 's/^/      /'
+    bad "the built stylesheet fetches from a remote origin"
+  else
+    ok "the built stylesheet fetches nothing remote"
+  fi
+  fonts=$(ls apps/desktop/dist/assets/*.woff2 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$fonts" -gt 0 ]]; then
+    ok "$fonts webfont(s) bundled locally"
+  else
+    echo "      note: no webfonts in the bundle; the interface will use platform fonts"
+  fi
+else
+  echo "    dist/ not built; run npm run build to check the emitted output too"
+fi
+
+section "Font licences travel with the fonts"
+# The OFL requires the licence accompany the font wherever it is redistributed.
+fonts_dir=apps/desktop/src/assets/fonts
+missing=0
+# Once per family, not once per subset file — two Inter subsets are still one
+# licence obligation.
+check_family() {
+  local prefix="$1" licence="$2" name="$3"
+  compgen -G "$fonts_dir/$prefix*.woff2" >/dev/null || return 0
+  if [[ ! -f "$fonts_dir/$licence" ]]; then
+    bad "$name is bundled without its licence ($licence)"
+    missing=1
+  fi
+}
+check_family "inter-" "Inter-LICENSE.txt" "Inter"
+check_family "jetbrains-mono-" "JetBrainsMono-LICENSE.txt" "JetBrains Mono"
+[[ $missing -eq 0 ]] && ok "every bundled font ships with its OFL text"
 
 section "Tauri capability grants"
 perms=$(grep -o '"[a-z-]*:[a-z-]*"' apps/desktop/src-tauri/capabilities/default.json | tr -d '"' | tr '\n' ' ')

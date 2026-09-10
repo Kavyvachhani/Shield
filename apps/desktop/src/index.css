@@ -15,16 +15,71 @@
  * browser affordances (scrollbar, focus ring, selection) that cannot be
  * expressed as a component class.
  *
- * Fonts. This used to @import Inter and JetBrains Mono from fonts.googleapis.com,
- * which meant an application describing itself as offline-capable and local-first
- * made a request to Google every time it started — announcing to a third party
- * that an engagement tool had launched, from which address, and when. On a client
- * site or an air-gapped network that is both a disclosure and a failure: the
- * fonts do not arrive, and the CSP had to allow two external origins to let them
- * try. The type stack in the design system falls back to the platform's own UI
- * font (Segoe UI on Windows, San Francisco on macOS) and its monospace, so the
- * application now renders identically online and offline, and reaches nothing.
+ * Fonts are declared below and shipped inside the bundle, so the interface
+ * renders in its own typeface with no network access. The stacks in the design
+ * system still name a platform fallback after each, which is what draws the
+ * first frame and what covers any character outside the bundled subsets.
  */
+
+/*
+ * Vendored webfonts.
+ *
+ * These are served from the bundle, not from a CDN. The application used to
+ * @import them from fonts.googleapis.com, which meant a tool that describes
+ * itself as offline-capable and local-first contacted Google every time it
+ * started — announcing to a third party that an engagement tool had launched,
+ * from which address, and when — and then failed to render in its own typeface
+ * on any air-gapped or restricted network, because the request did not
+ * complete. Vendoring fixes both: the CSP needs no external origin, and the
+ * interface looks the same offline as on.
+ *
+ * Both are variable fonts, so one file per subset covers every weight the
+ * design system uses (400 through 800) rather than one download per weight.
+ * Only the latin and latin-ext subsets are bundled — the Cyrillic, Greek and
+ * Vietnamese ranges Google also serves would triple the size for glyphs this
+ * interface has no copy in. The unicode-range on each face is what makes that
+ * safe: a browser loads a file only when the page actually uses a character in
+ * its range, so latin-ext costs nothing until an accented name appears.
+ *
+ * Inter and JetBrains Mono are both SIL Open Font License 1.1, which permits
+ * redistribution in this form. See THIRD_PARTY_LICENSES.md.
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 *,
 *::before,
