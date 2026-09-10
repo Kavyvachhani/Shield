@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/check-design-tokens.mjs && tsc -b && vite build",
     "tauri": "tauri",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:tokens": "node scripts/check-design-tokens.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

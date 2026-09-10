@@ -85,9 +85,9 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
         background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)',
         borderRadius: 'var(--radius)',
       }}>
-        <AlertTriangle size={20} style={{ color: 'var(--amber)', flexShrink: 0 }} />
+        <AlertTriangle size={20} style={{ color: 'var(--warning)', flexShrink: 0 }} />
         <div>
-          <div style={{ fontWeight: 700, color: 'var(--amber)', fontSize: 13 }}>Authorization Gate — Mandatory Before Any Dynamic Scan</div>
+          <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 13 }}>Authorization Gate — Mandatory Before Any Dynamic Scan</div>
           <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>
             DAST capabilities are locked until a signed Rules of Engagement is stored. This action writes to the tamper-evident audit ledger.
           </div>
@@ -133,10 +133,10 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
             <input
               type="range" min={1} max={20} value={scope.rateLimitRps}
               onChange={(e) => setScope(s => ({ ...s, rateLimitRps: Number(e.target.value) }))}
-              style={{ width: '100%', accentColor: 'var(--cyan)' }}
+              style={{ width: '100%', accentColor: 'var(--accent)' }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              <span>1 rps (safest)</span><span style={{ color: 'var(--cyan)', fontWeight: 600 }}>{scope.rateLimitRps} rps</span><span>20 rps</span>
+              <span>1 rps (safest)</span><span style={{ color: 'var(--accent)', fontWeight: 600 }}>{scope.rateLimitRps} rps</span><span>20 rps</span>
             </div>
           </div>
         </Section>
@@ -146,7 +146,7 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
           <button
             type="button"
             onClick={() => setShowRoeDoc(v => !v)}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', color: 'var(--cyan)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
           >
             <FileSignature size={14} />
             {showRoeDoc ? 'Collapse' : 'Review RoE Document'}
@@ -185,7 +185,7 @@ export function AuthGateScreen({ target, onRoESigned }: Props) {
                 type="checkbox"
                 checked={checklist[key as keyof typeof checklist]}
                 onChange={(e) => setChecklist(c => ({ ...c, [key]: e.target.checked }))}
-                style={{ marginTop: 2, accentColor: 'var(--emerald)', width: 15, height: 15, flexShrink: 0 }}
+                style={{ marginTop: 2, accentColor: 'var(--success)', width: 15, height: 15, flexShrink: 0 }}
               />
               <span style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>{text}</span>
             </label>
@@ -267,7 +267,7 @@ function TagInput({ label, required, tags, input, setInput, onAdd, onRemove, pla
 }) {
   return (
     <div>
-      <label style={labelStyle}>{label} {required && <span style={{ color: 'var(--red)' }}>*</span>}</label>
+      <label style={labelStyle}>{label} {required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <input
           value={input} onChange={(e) => setInput(e.target.value)}
@@ -280,7 +280,7 @@ function TagInput({ label, required, tags, input, setInput, onAdd, onRemove, pla
             outline: 'none',
           }}
         />
-        <button type="button" onClick={onAdd} style={{ padding: '7px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', color: 'var(--cyan)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+        <button type="button" onClick={onAdd} style={{ padding: '7px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
           Add
         </button>
       </div>
@@ -291,7 +291,7 @@ function TagInput({ label, required, tags, input, setInput, onAdd, onRemove, pla
               display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '3px 10px', borderRadius: 99,
               background: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.2)',
-              color: 'var(--cyan)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
+              color: 'var(--accent)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
             }}>
               {t}
               <button type="button" onClick={() => onRemove(t)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', lineHeight: 1, padding: 0, opacity: 0.6 }}>×</button>

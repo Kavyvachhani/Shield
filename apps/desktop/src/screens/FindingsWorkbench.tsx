@@ -7,7 +7,7 @@ import type {
   Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord, Evidence,
 } from '../types';
 import { api } from '../lib/tauri';
-import { Callout, Modal } from '../components/ui';
+import { Callout, Modal, EmptyState, Spinner, SeverityBadge } from '../components/ui';
 
 interface Props {
   scanId: string;
@@ -16,6 +16,14 @@ interface Props {
 
 /** The two statuses that record a standing decision against the target. */
 const EXCEPTION_STATUSES: FindingStatus[] = ['Accepted Risk', 'False Positive'];
+
+/** The band a priority score falls in. One definition, so the colour a score
+ *  gets in the table is the colour it gets in the detail pane. */
+function priorityColor(score: number): string {
+  if (score >= 9) return 'var(--danger)';
+  if (score >= 7) return 'var(--warning)';
+  return 'var(--success)';
+}
 
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Info'];
 const STATUSES: FindingStatus[] = ['Open', 'In Progress', 'Remediated', 'Accepted Risk', 'False Positive'];
@@ -234,16 +242,25 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
       {/* LEFT: Findings table */}
       <div style={{ flex: '0 0 55%', display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>
         {/* Filter bar */}
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, position: 'relative', minWidth: 180 }}>
-            <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search title, component, CWE..."
-              style={{ width: '100%', paddingLeft: 30, paddingRight: 10, paddingTop: 7, paddingBottom: 7, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
+        <div className="row wrap" style={{ padding: 'var(--s-3) var(--s-4)', borderBottom: '1px solid var(--border)', gap: 'var(--s-2)' }}>
+          <div className="search grow" style={{ minWidth: 180 }}>
+            <Search size={13} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search title, component, CWE…"
+              aria-label="Search findings"
             />
           </div>
 
-          <button onClick={() => setShowFilters(v => !v)} style={{ padding: '7px 12px', background: showFilters ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)', border: `1px solid ${showFilters ? 'rgba(34,211,238,0.3)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: showFilters ? 'var(--cyan)' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          {/* aria-pressed carries the on/off state to assistive technology, and
+              is also what the stylesheet keys the active appearance off — so the
+              two cannot drift apart the way a hand-set colour does. */}
+          <button
+            className="btn btn-sm"
+            aria-pressed={showFilters}
+            onClick={() => setShowFilters(v => !v)}
+          >
             <SlidersHorizontal size={13} /> Filters
           </button>
 
@@ -260,32 +277,32 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             }}
           />
           <button
+            className="btn btn-sm"
             onClick={() => importInput.current?.click()}
             disabled={importing}
             title="Import findings from another tool's SARIF output (CodeQL, Snyk, Grype, GitHub code scanning)"
-            style={{ padding: '7px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: importing ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: importing ? 0.6 : 1 }}>
-            <FileUp size={13} /> {importing ? 'Importing…' : 'Import SARIF'}
+          >
+            {importing ? <Spinner size={13} /> : <FileUp size={13} />}
+            {importing ? 'Importing…' : 'Import SARIF'}
           </button>
 
           <button
+            className="btn btn-sm"
+            aria-pressed={showRegister}
             onClick={() => setShowRegister(v => !v)}
             title="Decisions that carry forward to every later scan of this target"
-            style={{ padding: '7px 12px', background: showRegister ? 'rgba(148,163,184,0.14)' : 'var(--bg-elevated)', border: `1px solid ${showRegister ? 'rgba(148,163,184,0.4)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: showRegister ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          >
             <ShieldOff size={13} /> Exceptions
-            {exceptions.length > 0 && (
-              <span style={{ padding: '0 6px', borderRadius: 99, background: 'rgba(148,163,184,0.25)', fontSize: 10, fontWeight: 700 }}>
-                {exceptions.length}
-              </span>
-            )}
+            {exceptions.length > 0 && <span className="badge badge-outline">{exceptions.length}</span>}
           </button>
 
-          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          <span className="dim small tabular" style={{ marginLeft: 'auto' }}>
             {displayed.length} / {findings.length} findings
           </span>
         </div>
 
         {importMsg && (
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'rgba(52,211,153,0.06)', fontSize: 11, color: 'var(--emerald)', lineHeight: 1.6 }}>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'rgba(52,211,153,0.06)', fontSize: 11, color: 'var(--success)', lineHeight: 1.6 }}>
             {importMsg}
           </div>
         )}
@@ -317,7 +334,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 }}>
                         {e.justification} — {e.raisedBy}
                         {e.daysUntilExpiry !== null && (
-                          <span style={{ marginLeft: 6, color: !e.active ? 'var(--red)' : e.daysUntilExpiry <= 30 ? 'var(--amber)' : 'var(--text-muted)' }}>
+                          <span style={{ marginLeft: 6, color: !e.active ? 'var(--danger)' : e.daysUntilExpiry <= 30 ? 'var(--warning)' : 'var(--text-muted)' }}>
                             · {e.active ? `review in ${e.daysUntilExpiry} days` : 'lapsed — reported again on the next scan'}
                           </span>
                         )}
@@ -343,7 +360,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
             <FilterSelect label="Tool" value={toolFilter} onChange={setToolFilter} options={['Semgrep', 'Trivy', 'Gitleaks', 'OWASP ZAP', 'Nuclei']} />
             {(sevFilter || statusFilter || toolFilter) && (
               <button onClick={() => { setSevFilter(''); setStatusFilter(''); setToolFilter(''); }}
-                style={{ padding: '5px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
+                style={{ padding: '5px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <X size={11} /> Clear
               </button>
             )}
@@ -353,19 +370,25 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
         {/* Table */}
         <div style={{ flex: 1, overflow: 'auto' }}>
           {loading ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Loading findings...</div>
-          ) : displayed.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
-              No findings match the current filters.
+            <div className="empty">
+              <Spinner size={20} />
+              <p>Loading findings…</p>
             </div>
+          ) : displayed.length === 0 ? (
+            <EmptyState
+              icon={findings.length === 0 ? <AlertOctagon size={22} /> : <Search size={22} />}
+              title={findings.length === 0 ? 'No findings in this scan' : 'Nothing matches these filters'}
+            >
+              {findings.length === 0
+                ? 'The engines completed without raising anything. Check the coverage record on the scan console to see what was actually read before reporting this as a clean result.'
+                : 'Every finding in this scan is filtered out. Clear the search, or widen the severity and status filters, to see them again.'}
+            </EmptyState>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className="table table-clickable">
               <thead>
-                <tr style={{ position: 'sticky', top: 0, background: 'var(--bg-surface)', zIndex: 1 }}>
+                <tr>
                   {['Severity', 'Title', 'Component', 'Priority', 'Status', ''].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
-                      {h}
-                    </th>
+                    <th key={h} scope="col">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -373,42 +396,38 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 {displayed.map((f) => (
                   <tr
                     key={f.id}
+                    className={selected?.id === f.id ? 'selected' : undefined}
                     onClick={() => { setSelected(f); setTriageStatus(f.status); setTriageNote(''); setTriageError(''); setTriageEffect(''); setReviewDate(''); }}
-                    style={{
-                      cursor: 'pointer',
-                      background: selected?.id === f.id ? 'rgba(34,211,238,0.05)' : 'transparent',
-                      borderBottom: '1px solid var(--border)',
-                      transition: 'background 0.12s',
-                    }}
-                    onMouseEnter={(e) => { if (selected?.id !== f.id) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'; }}
-                    onMouseLeave={(e) => { if (selected?.id !== f.id) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                   >
-                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
-                      <span className={`badge ${SEV_COLORS[f.severity] || 'badge-info'}`}>{f.severity}</span>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <SeverityBadge severity={f.severity} />
                     </td>
-                    <td style={{ padding: '9px 12px', maxWidth: 200 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.title}</div>
-                      {f.cweId && <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>{f.cweId}</div>}
+                    <td style={{ maxWidth: 200 }}>
+                      <div className="truncate" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{f.title}</div>
+                      {f.cweId && <div className="mono dim small">{f.cweId}</div>}
                     </td>
-                    <td style={{ padding: '9px 12px', maxWidth: 160 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-code)', fontFamily: "'JetBrains Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <td style={{ maxWidth: 160 }}>
+                      <div className="mono small truncate" style={{ color: 'var(--text-secondary)' }}>
                         {f.affectedComponent}
                       </div>
                     </td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: f.priorityScore >= 9 ? 'var(--red)' : f.priorityScore >= 7 ? 'var(--amber)' : 'var(--emerald)' }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <span
+                        className="tabular"
+                        style={{ fontSize: 13, fontWeight: 800, color: priorityColor(f.priorityScore) }}
+                      >
                         {f.priorityScore.toFixed(1)}
                       </span>
                     </td>
-                    <td style={{ padding: '9px 12px' }}>
+                    <td>
                       <StatusPill status={f.status} />
                       {exceptionFor(f) && (
-                        <div title="Carried forward from a standing exception" style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+                        <div className="row dim" style={{ gap: 3, fontSize: 9, marginTop: 3 }} title="Carried forward from a standing exception">
                           <ShieldOff size={9} /> standing
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
+                    <td style={{ whiteSpace: 'nowrap' }}>
                       <div className="row" style={{ gap: 2 }}>
                         {f.status !== 'False Positive' && (
                           <button
@@ -452,7 +471,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
               <div style={{ flex: 1, marginRight: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                   <span className={`badge ${SEV_COLORS[selected.severity] || 'badge-info'}`}>{selected.severity}</span>
-                  {selected.cweId && <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-code)' }}>{selected.cweId}</span>}
+                  {selected.cweId && <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)' }}>{selected.cweId}</span>}
                   {selected.kevListed && (
                     <span style={{ padding: '2px 8px', borderRadius: 99, background: 'rgba(239,68,68,0.15)', color: '#fca5a5', fontSize: 10, fontWeight: 700, border: '1px solid rgba(239,68,68,0.3)' }}>
                       CISA KEV
@@ -461,11 +480,11 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                   <StatusPill status={selected.status} />
                 </div>
                 <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>{selected.title}</h3>
-                <div style={{ marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-code)' }}>{selected.affectedComponent}</div>
+                <div style={{ marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)' }}>{selected.affectedComponent}</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Priority</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: selected.priorityScore >= 9 ? 'var(--red)' : 'var(--cyan)', lineHeight: 1 }}>{selected.priorityScore.toFixed(1)}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: selected.priorityScore >= 9 ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>{selected.priorityScore.toFixed(1)}</div>
               </div>
             </div>
 
@@ -484,7 +503,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 <ScoreCard label="KEV" value={selected.kevListed ? 'YES ⚡' : 'No'} highlight={selected.kevListed} />
               </div>
               {selected.priorityRationale && (
-                <div style={{ padding: '10px 12px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--cyan)', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
+                <div style={{ padding: '10px 12px', background: 'rgba(34,211,238,0.06)', border: '1px solid rgba(34,211,238,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 11, color: 'var(--accent)', fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>
                   💡 <strong>Rationale:</strong> {selected.priorityRationale}
                 </div>
               )}
@@ -506,7 +525,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
             {/* Remediation */}
             <DetailSection title="Remediation Guidance">
-              <div style={{ padding: '12px 14px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--emerald)', lineHeight: 1.6 }}>
+              <div style={{ padding: '12px 14px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--success)', lineHeight: 1.6 }}>
                 {selected.remediation}
               </div>
             </DetailSection>
@@ -518,7 +537,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 {evidenceFor !== selected.id ? (
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading evidence…</div>
                 ) : evidences.length === 0 ? (
-                  <div style={{ fontSize: 11, color: 'var(--amber)', lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--warning)', lineHeight: 1.6 }}>
                     This finding records {selected.evidenceCount} artefact
                     {selected.evidenceCount === 1 ? '' : 's'}, but they could not be loaded.
                     Verify by hand before triaging.
@@ -530,7 +549,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>{e.title}</span>
                         <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>{e.evidenceType}</span>
                       </div>
-                      <pre style={{ margin: 0, padding: '10px 12px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 10.5, lineHeight: 1.6, color: 'var(--text-code)', fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflow: 'auto' }}>
+                      <pre style={{ margin: 0, padding: '10px 12px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 10.5, lineHeight: 1.6, color: 'var(--text-secondary)', fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflow: 'auto' }}>
                         {e.content}
                       </pre>
                       {e.hash && (
@@ -557,9 +576,9 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                   <button key={s} type="button" onClick={() => setTriageStatus(s)} style={{
                     padding: '5px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600,
                     cursor: 'pointer', border: '1px solid',
-                    borderColor: triageStatus === s ? 'var(--cyan)' : 'var(--border)',
+                    borderColor: triageStatus === s ? 'var(--accent)' : 'var(--border)',
                     background: triageStatus === s ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)',
-                    color: triageStatus === s ? 'var(--cyan)' : 'var(--text-muted)',
+                    color: triageStatus === s ? 'var(--accent)' : 'var(--text-muted)',
                     transition: 'all 0.12s',
                   }}>
                     {s}
@@ -605,15 +624,15 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 </div>
               )}
 
-              {triageError && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{triageError}</div>}
+              {triageError && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{triageError}</div>}
               {triageEffect && (
-                <div style={{ fontSize: 11, color: 'var(--emerald)', marginTop: 8, padding: '8px 10px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
+                <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 8, padding: '8px 10px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', borderRadius: 'var(--radius-sm)', lineHeight: 1.6 }}>
                   {triageEffect}
                 </div>
               )}
               <button
                 onClick={submitTriage} disabled={triaging}
-                style={{ marginTop: 10, padding: '8px 20px', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--cyan)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                style={{ marginTop: 10, padding: '8px 20px', background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Flag size={13} /> {triaging ? 'Saving...' : 'Save Triage Decision'}
               </button>
             </DetailSection>
@@ -789,7 +808,7 @@ function ScoreCard({ label, value, highlight }: { label: string; value: string; 
   return (
     <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: `1px solid ${highlight ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
       <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 800, color: highlight ? 'var(--red)' : 'var(--text-primary)' }}>{value}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, color: highlight ? 'var(--danger)' : 'var(--text-primary)' }}>{value}</div>
     </div>
   );
 }

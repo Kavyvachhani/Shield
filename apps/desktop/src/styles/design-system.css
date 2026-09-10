@@ -245,6 +245,15 @@ html, body, #root {
 .btn-danger { background: var(--danger); border-color: var(--danger); color: var(--text-inverse); }
 .btn-danger:hover:not(:disabled) { filter: brightness(1.08); }
 
+/* A .btn that toggles something on and off. Keying the appearance off
+   aria-pressed rather than a class means the visual state and the state
+   announced to a screen reader are the same fact, and cannot disagree. */
+.btn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--border-focus);
+  color: var(--accent);
+}
+
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
 .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 

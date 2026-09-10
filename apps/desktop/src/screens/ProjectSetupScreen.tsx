@@ -184,7 +184,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
             <div style={{
               width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontSize: 12, fontWeight: 700,
-              background: step >= s ? 'var(--cyan)' : 'var(--bg-elevated)',
+              background: step >= s ? 'var(--accent)' : 'var(--bg-elevated)',
               color: step >= s ? '#020817' : 'var(--text-muted)',
               border: step >= s ? 'none' : '1px solid var(--border-strong)',
               transition: 'all 0.2s',
@@ -230,7 +230,7 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
                   </div>
                 </div>
                 {resuming === p.id
-                  ? <Loader2 size={15} className="spin" style={{ color: 'var(--cyan)' }} />
+                  ? <Loader2 size={15} className="spin" style={{ color: 'var(--accent)' }} />
                   : <ChevronRight size={15} style={{ color: 'var(--text-muted)' }} />}
               </button>
             ))}
@@ -283,9 +283,9 @@ export function ProjectSetupScreen({ onProjectTargetReady }: Props) {
                       onClick={() => setTargetType(t)}
                       style={{
                         padding: '10px 8px', borderRadius: 'var(--radius-sm)',
-                        border: `1px solid ${targetType === t ? 'var(--cyan)' : 'var(--border-strong)'}`,
+                        border: `1px solid ${targetType === t ? 'var(--accent)' : 'var(--border-strong)'}`,
                         background: targetType === t ? 'rgba(34,211,238,0.08)' : 'var(--bg-elevated)',
-                        color: targetType === t ? 'var(--cyan)' : 'var(--text-secondary)',
+                        color: targetType === t ? 'var(--accent)' : 'var(--text-secondary)',
                         cursor: 'pointer', fontSize: 12, fontWeight: 500,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                         transition: 'all 0.15s',
@@ -367,7 +367,7 @@ function CredentialsFields({
       padding: 14, background: 'rgba(255,255,255,0.02)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <KeyRound size={14} style={{ color: 'var(--cyan)' }} />
+        <KeyRound size={14} style={{ color: 'var(--accent)' }} />
         <span style={{
           fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)',
           letterSpacing: '0.03em', textTransform: 'uppercase',
@@ -388,9 +388,9 @@ function CredentialsFields({
             onClick={() => setKind(o.value)}
             style={{
               padding: '8px 6px', borderRadius: 'var(--radius-sm)',
-              border: `1px solid ${kind === o.value ? 'var(--cyan)' : 'var(--border-strong)'}`,
+              border: `1px solid ${kind === o.value ? 'var(--accent)' : 'var(--border-strong)'}`,
               background: kind === o.value ? 'rgba(34,211,238,0.08)' : 'var(--bg-elevated)',
-              color: kind === o.value ? 'var(--cyan)' : 'var(--text-secondary)',
+              color: kind === o.value ? 'var(--accent)' : 'var(--text-secondary)',
               cursor: 'pointer', fontSize: 11, fontWeight: 500, transition: 'all 0.15s',
             }}
           >
@@ -444,7 +444,7 @@ function SectionHeader({ icon, title, subtitle }: { icon: React.ReactNode; title
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <div style={{ color: 'var(--cyan)' }}>{icon}</div>
+        <div style={{ color: 'var(--accent)' }}>{icon}</div>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</h2>
       </div>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{subtitle}</p>
@@ -460,7 +460,7 @@ function Field({ label, children, required, hint }: { label: string; children: R
   return (
     <div>
       <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, letterSpacing: '0.03em', textTransform: 'uppercase' }}>
-        {label} {required && <span style={{ color: 'var(--red)' }}>*</span>}
+        {label} {required && <span style={{ color: 'var(--danger)' }}>*</span>}
       </label>
       {children}
       {hint && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{hint}</div>}
@@ -483,7 +483,7 @@ function Input({ value, onChange, placeholder, mono, secret }: { value: string; 
         fontSize: mono ? 12 : 13, fontFamily: mono ? "'JetBrains Mono', monospace" : 'inherit',
         outline: 'none', transition: 'border-color 0.15s',
       }}
-      onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--cyan-dim)'; }}
+      onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-strong)'; }}
       onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.13)'; }}
     />
   );
@@ -507,7 +507,7 @@ function SubmitButton({ loading, label }: { loading: boolean; label: React.React
       type="submit" disabled={loading}
       style={{
         width: '100%', padding: '11px 20px',
-        background: loading ? 'var(--bg-elevated)' : 'var(--cyan)',
+        background: loading ? 'var(--bg-elevated)' : 'var(--accent)',
         color: loading ? 'var(--text-muted)' : '#020817',
         border: 'none', borderRadius: 'var(--radius-sm)',
         fontWeight: 700, fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer',

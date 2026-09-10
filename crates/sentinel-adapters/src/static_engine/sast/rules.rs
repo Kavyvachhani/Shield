@@ -53,6 +53,21 @@ pub struct SastRule {
     /// that builds a SQL string from a fixture is a test, and reporting it
     /// buries the one in the request handler.
     pub scan_tests: bool,
+    /// Match against the whole file rather than a line at a time.
+    ///
+    /// The engine is line-oriented, which is right for almost every rule here:
+    /// a sink and its argument sit on one line, and matching per line keeps a
+    /// pattern from spanning half a file. But some weaknesses are *defined* by
+    /// what follows the construct — an exception handler is only swallowed if
+    /// the block after it is empty — and those can never match a single line.
+    /// Written as line rules they compile, pass every metadata check, and
+    /// silently never fire.
+    ///
+    /// Set this and the pattern is run over the file's text, with the line
+    /// number derived from the match offset. Keep such patterns anchored and
+    /// bounded: `\s*` across a newline is fine, an unbounded `.*` is not, and
+    /// `(?s)` in particular will happily swallow a file.
+    pub multiline: bool,
 }
 
 // ── CVSS 4.0 vectors, calibrated once and reused ─────────────────────────────
@@ -161,6 +176,7 @@ SastRule {
     pattern: r#"(?i)\b(?:execute|executeQuery|executeUpdate|query|rawQuery|exec_sql|prepare)\s*\((?P<arg>[^)]*(?:\+|\$\{|%s|\|\||\.format\(|f["'])[^)]*)\)"#,
     mode: Mode::Tainted,
     unless: &["?", "$1", ":id", "prepareStatement", "@param"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -205,6 +221,7 @@ SastRule {
     pattern: r#"(?i)\b(?:\.raw|raw_query|rawQuery|\.whereRaw|\.havingRaw|\.orderByRaw|sequelize\.query|session\.execute|db\.exec|Model\.objects\.raw|find_by_sql)\s*\((?P<arg>[^)]*(?:\+|\$\{|%s|#\{|\.format\(|f["'])[^)]*)\)"#,
     mode: Mode::Tainted,
     unless: &["replacements", "params=", ":id", "bindparams"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -256,6 +273,7 @@ SastRule {
     pattern: r#"(?i)\b(?:exec|execSync|spawnSync|system|popen|shell_exec|passthru|proc_open|os\.system|subprocess\.(?:call|run|Popen|check_output)|Runtime\.getRuntime\(\)\.exec|exec\.Command|Process\.Start|IO\.popen|Kernel\.system|`)\s*\(?(?P<arg>[^)\n]*)"#,
     mode: Mode::Tainted,
     unless: &["execFile", "shell=False", "shell:false", "ProcessBuilder"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -299,6 +317,7 @@ SastRule {
     pattern: r"(?i)\b(?:shell\s*=\s*True|shell\s*:\s*true)\b",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -339,6 +358,7 @@ SastRule {
     pattern: r#"(?i)(?:\beval\s*\(|\bnew\s+Function\s*\(|\bsetTimeout\s*\(\s*["'`]|\bsetInterval\s*\(\s*["'`]|\bexec\s*\(\s*compile|\bassert\s*\(\s*["']|\bcreate_function\s*\(|\bReflectionFunction\s*\(|\bScriptEngine|\bGroovyShell|\binstance_eval|\bclass_eval|\bBinding\.eval)"#,
     mode: Mode::Always,
     unless: &["eval(\"require\")", "// eslint", "eval_type"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -385,6 +405,7 @@ SastRule {
     pattern: r"(?i)\b(?:find|findOne|findOneAndUpdate|findOneAndDelete|updateOne|updateMany|deleteOne|deleteMany|countDocuments|aggregate)\s*\(\s*(?P<arg>\{[^}]*\}|[A-Za-z_$][A-Za-z0-9_$.]*)",
     mode: Mode::Tainted,
     unless: &["String(", "Number(", "ObjectId(", "sanitize", "toString()"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -423,6 +444,7 @@ SastRule {
     pattern: r#"(?i)(?:search|bind|LdapQuery|DirectorySearcher|ldap_search|search_s)\s*\((?P<arg>[^)]*\(\s*(?:cn|uid|sAMAccountName|mail|objectClass)\s*=[^)]*)"#,
     mode: Mode::Tainted,
     unless: &["escape_filter_chars", "LdapFilterEncode", "escapeLDAP"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -469,6 +491,7 @@ SastRule {
     pattern: r"(?i)\b(?:render_template_string|Template\s*\(|from_string|compile\s*\(|createTemplate|new\s+Template|Handlebars\.compile|_\.template|Twig_Template|StringTemplateLoader)\s*\((?P<arg>[^)]*)",
     mode: Mode::Tainted,
     unless: &["render_template(", "loadTemplate", "FileTemplateLoader"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -505,6 +528,7 @@ SastRule {
     pattern: r#"(?i)\b(?:xpath|selectNodes|selectSingleNode|SelectSingleNode|evaluate|compile)\s*\((?P<arg>[^)]*["'](?:/|//)[^)]*(?:\+|\$\{|%s|\.format\()[^)]*)"#,
     mode: Mode::Tainted,
     unless: &["XPathVariableResolver", "setVariable"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -547,6 +571,7 @@ SastRule {
     pattern: r#"(?i)\b(?:log|logger|logging|console)\.(?:info|warn|error|debug|log|trace)\s*\((?P<arg>[^)]*(?:\+|\$\{|%s|#\{|\.format\(|f["'])[^)]*)\)"#,
     mode: Mode::Tainted,
     unless: &["encode", "sanitize", "replace(/[\\r\\n]/"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -593,6 +618,7 @@ SastRule {
     pattern: r"(?i)(?:\.innerHTML\s*=|\.outerHTML\s*=|\.insertAdjacentHTML\s*\(|document\.write(?:ln)?\s*\(|\$\([^)]*\)\.(?:html|append|prepend|after|before|replaceWith)\s*\()(?P<arg>[^;\n]*)",
     mode: Mode::Tainted,
     unless: &["DOMPurify", "sanitize", "textContent", "escapeHtml"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -637,6 +663,7 @@ SastRule {
     pattern: r"(?i)(?:dangerouslySetInnerHTML|\bv-html\b|bypassSecurityTrust(?:Html|Script|Url|ResourceUrl)|\bmark_safe\s*\(|\|\s*safe\b|\bhtml_safe\b|\braw\s+@|template\.HTML\s*\(|\{\{\{|\bautoescape\s+off\b|\bHtml\.Raw\s*\()(?P<arg>[^;\n]*)",
     mode: Mode::Always,
     unless: &["DOMPurify.sanitize", "sanitizeHtml("],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -678,6 +705,7 @@ SastRule {
     pattern: r"(?i)autoescape\s*[=:]\s*(?:False|false|0|None)\b|escape\s*:\s*false",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -733,6 +761,7 @@ SastRule {
     pattern: r"(?i)\b(?:pickle\.loads?|cPickle\.loads?|marshal\.loads?|yaml\.load\s*\(|unserialize\s*\(|ObjectInputStream|readObject\s*\(|BinaryFormatter|LosFormatter|NetDataContractSerializer|TypeNameHandling\s*\.\s*(?:All|Objects|Auto)|Marshal\.load|node-serialize|serialize\.unserialize)\s*",
     mode: Mode::Always,
     unless: &["safe_load", "SafeLoader", "yaml.safe_load", "safe_dump", "CSafeLoader"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -782,6 +811,7 @@ SastRule {
     pattern: r"(?i)\b(?:DocumentBuilderFactory\.newInstance|SAXParserFactory\.newInstance|XMLInputFactory\.newInstance|XmlTextReader|XmlDocument\s*\(\s*\)|xml\.etree\.ElementTree\.(?:parse|fromstring)|lxml\.etree\.(?:parse|fromstring)|simplexml_load_(?:string|file)|DOMDocument\s*\(|libxml_disable_entity_loader\s*\(\s*false)",
     mode: Mode::Always,
     unless: &["defusedxml", "disallow-doctype-decl", "DtdProcessing.Prohibit", "resolve_entities=False", "XMLParser(resolve_entities=False)"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -828,9 +858,10 @@ SastRule {
              before resolving does not count, because `..` is resolved afterwards.",
     },
     languages: WEB_LANGS,
-    pattern: r#"(?i)\b(?:open|readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream|sendFile|File\.(?:read|write|open|new)|FileInputStream|FileOutputStream|Paths\.get|os\.path\.join|fopen|file_get_contents|file_put_contents|readfile|include|require_once|ioutil\.ReadFile|os\.(?:Open|ReadFile)|File\.(?:ReadAllText|WriteAllText|OpenRead))\s*\(?(?P<arg>[^)\n]*)"#,
+    pattern: r#"(?i)\b(?:open|readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream|sendFile|File\.(?:read|write|open|new)|FileInputStream|FileOutputStream|Paths\.get|os\.path\.join|fopen|file_get_contents|file_put_contents|readfile|include|require_once|ioutil\.ReadFile|os\.(?:Open|ReadFile)|File\.(?:ReadAllText|WriteAllText|OpenRead))\b\s*\(?(?P<arg>[^)\n]*)"#,
     mode: Mode::Tainted,
     unless: &["path.basename", "os.path.basename", "filepath.Base", "secure_filename", "Path.GetFileName", "File.basename", "__dirname", "resolve(root"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -874,6 +905,7 @@ SastRule {
     pattern: r"(?i)(?:\bZipEntry\b|\bTarEntry\b|zipfile\.ZipFile|tarfile\.open|extractall|\.extract\s*\(|getNextEntry|entry\.(?:getName|fileName|name))",
     mode: Mode::Always,
     unless: &["startsWith(", "commonPath", "is_within", "resolve(root", "safe_extract", "filter='data'", "filter=\"data\""],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -925,6 +957,7 @@ SastRule {
     pattern: r"(?i)\b(?:fetch|axios(?:\.(?:get|post|put|delete|request))?|got|superagent|request|http\.(?:get|request)|https\.(?:get|request)|urllib\.request\.urlopen|requests\.(?:get|post|put|delete|head|request)|HttpClient|WebClient|RestTemplate|file_get_contents|curl_setopt|http\.Get|http\.Post|Net::HTTP)\s*\(?(?P<arg>[^)\n]*)",
     mode: Mode::Tainted,
     unless: &["ALLOWED_HOSTS", "allowlist", "allowList", "isPrivate(", "127.0.0.1", "localhost"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -972,6 +1005,7 @@ SastRule {
     pattern: r#"(?i)(?:createHash\s*\(\s*["'](?:md5|sha1)["']|hashlib\.(?:md5|sha1)\s*\(|MessageDigest\.getInstance\s*\(\s*["'](?:MD5|SHA-?1)["']|MD5\.Create\s*\(|SHA1\.Create\s*\(|md5\s*\(\s*\$|Digest::MD5|crypto/md5|crypto/sha1)"#,
     mode: Mode::Always,
     unless: &["etag", "cache", "checksum", "non-crypto", "nonSecurity"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1018,6 +1052,7 @@ SastRule {
     pattern: r#"(?i)(?:["'](?:des|des-ede3|rc4|rc2|blowfish)[-_a-z0-9]*["']|AES/ECB|/ECB/|Cipher\.getInstance\s*\(\s*["'](?:DES|DESede|RC2|RC4|AES/ECB)|MODE_ECB|DESCryptoServiceProvider|RC2CryptoServiceProvider|TripleDES|createCipheriv\s*\(\s*["'][^"']*ecb)"#,
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1061,6 +1096,7 @@ SastRule {
     pattern: r"(?i)(?:Math\.random\s*\(\)|\brandom\.(?:random|randint|choice|randrange|sample)\s*\(|new\s+Random\s*\(|mt_rand\s*\(|\brand\s*\(\)|math/rand|Random\.Next|SecureRandom\.hex|srand\s*\()",
     mode: Mode::Always,
     unless: &["secrets.", "SecureRandom", "crypto.randomBytes", "crypto/rand", "RandomNumberGenerator"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1102,6 +1138,7 @@ SastRule {
     pattern: r#"(?i)\b(?:iv|IV|nonce|initializationVector|initialization_vector)\s*[=:]\s*(?:["'][A-Za-z0-9+/=_-]{8,}["']|(?:Buffer\.from|bytes|new\s+byte\[\]|b)\s*\(?\s*["'][^"']{8,}["'])"#,
     mode: Mode::Always,
     unless: &["randomBytes", "urandom", "SecureRandom", "rand.Read", "RandomNumberGenerator"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1139,6 +1176,7 @@ SastRule {
     pattern: r"(?i)(?:modulusLength\s*:\s*(?:512|768|1024)\b|key_size\s*=\s*(?:512|768|1024)\b|initialize\s*\(\s*(?:512|768|1024)\s*\)|RSA\.Create\s*\(\s*(?:512|768|1024)\s*\)|GenerateKey\s*\([^,]*,\s*(?:512|768|1024)\s*\)|rsa\.generate_private_key\([^)]*key_size\s*=\s*(?:512|768|1024))",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1189,6 +1227,7 @@ SastRule {
     pattern: r"(?i)(?:rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['\x22]?0|verify\s*=\s*False|InsecureSkipVerify\s*:\s*true|CURLOPT_SSL_VERIFYPEER\s*,\s*(?:false|0)|CURLOPT_SSL_VERIFYHOST\s*,\s*0|ServerCertificateValidationCallback\s*[+=]+\s*(?:delegate|\()|setHostnameVerifier\s*\(\s*(?:ALLOW_ALL|NoopHostnameVerifier|\(.*\)\s*->\s*true)|TrustAllCerts|checkServerTrusted\s*\([^)]*\)\s*\{\s*\}|verify_mode\s*=\s*(?:OpenSSL::)?SSL::VERIFY_NONE|CERT_NONE)",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1230,6 +1269,7 @@ SastRule {
         ".svc", "www.w3.org", "schemas.", "xmlns", "DOCTYPE", "schemaLocation",
         "example.com", "example.org", "//127.", "purl.org", "docbook.org",
     ],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1282,6 +1322,7 @@ SastRule {
     // `jwt.decode` with verification on is the correct call, so the safe forms
     // are excluded here rather than by a look-ahead the engine cannot express.
     unless: &["jwt.verify", "verify=True", "requireSignature", "verify_signature\": True", "options={\"verify_signature\": True}"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1329,6 +1370,7 @@ SastRule {
     pattern: r#"(?i)(?:origin\s*:\s*true|origin\s*:\s*["']\*["']|Access-Control-Allow-Origin["']?\s*[,:]\s*["']\*["']|Access-Control-Allow-Origin["']?\s*[,:]\s*(?:req|request)\.(?:headers|get)|setHeader\s*\(\s*["']Access-Control-Allow-Origin["']\s*,\s*(?:req|origin)|AllowAnyOrigin\s*\(\s*\)|CORS_ORIGIN_ALLOW_ALL\s*=\s*True|allow_origins\s*=\s*\[\s*["']\*["'])"#,
     mode: Mode::Always,
     unless: &["ALLOWED", "allowlist", "allowList"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1368,6 +1410,7 @@ SastRule {
     pattern: r"(?i)(?:@csrf_exempt|csrf\s*:\s*false|WTF_CSRF_ENABLED\s*=\s*False|skip_before_action\s*:\s*verify_authenticity_token|protect_from_forgery\s+with:\s*:null_session|\.csrf\(\)\.disable\(\)|IgnoreAntiforgeryToken|@CrossOrigin\s*\(\s*origins\s*=\s*[\x22']\*)",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1411,6 +1454,7 @@ SastRule {
     pattern: r"(?i)(?:httpOnly\s*:\s*false|secure\s*:\s*false|sameSite\s*:\s*['\x22]?none['\x22]?|SESSION_COOKIE_HTTPONLY\s*=\s*False|SESSION_COOKIE_SECURE\s*=\s*False|setHttpOnly\s*\(\s*false\s*\)|setSecure\s*\(\s*false\s*\)|HttpOnly\s*=\s*false|RequireHttps\s*=\s*false|session\.cookie_httponly\s*=\s*0)",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1452,6 +1496,7 @@ SastRule {
     pattern: r"(?i)\b(?:res\.redirect|response\.redirect|redirect|sendRedirect|Redirect|header\s*\(\s*['\x22]Location:|http\.Redirect|redirect_to)\s*\(?(?P<arg>[^)\n]*)",
     mode: Mode::Tainted,
     unless: &["DESTINATIONS", "startsWith('/')", "allowlist", "url_for("],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1494,6 +1539,7 @@ SastRule {
     pattern: r"(?i)\b(?:new\s+\w+|\w+\.(?:create|update|save|insert|bulkCreate|findOneAndUpdate)|\w+\.objects\.(?:create|update)|BeanUtils\.copyProperties)\s*\(\s*(?P<arg>(?:req|request)\.body|(?:req|request)\.params|\*\*request\.(?:json|form)|params\[[^\]]*\](?:\.permit!)?)",
     mode: Mode::Always,
     unless: &["permit(", "pick(", "select(", "only:", "fields="],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1534,6 +1580,7 @@ SastRule {
     pattern: r"(?i)(?:^|\s)(?:DEBUG|debug)\s*[=:]\s*(?:True|true|1)\s*(?:$|[,;#])|app\.run\s*\([^)]*debug\s*=\s*True|\.set\s*\(\s*['\x22]debug['\x22]\s*,\s*true|display_errors\s*[=,]\s*['\x22]?(?:On|1)",
     mode: Mode::Always,
     unless: &["os.environ", "process.env", "getenv", "ENV[", "Environment.Get"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1571,6 +1618,7 @@ SastRule {
     pattern: r#"(?i)(?:["']0\.0\.0\.0["']|["']::["']\s*,|host\s*=\s*["']0\.0\.0\.0["']|ListenAndServe\s*\(\s*["']:\d+["']|Listen\s*\(\s*["']tcp["']\s*,\s*["']:\d+["'])"#,
     mode: Mode::Always,
     unless: &["127.0.0.1", "localhost"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1618,6 +1666,7 @@ SastRule {
     pattern: r"(?i)(?:\bmerge\s*\(|\bextend\s*\(|deepMerge|deepExtend|\$\.extend\s*\(\s*true|Object\.assign\s*\([^)]*(?:req|request)\.|\[\s*(?:key|k|prop|name|field)\s*\]\s*=)",
     mode: Mode::Tainted,
     unless: &["__proto__", "hasOwnProperty", "Object.create(null)", "BLOCKED"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1662,6 +1711,7 @@ SastRule {
     pattern: r"(?:\([^)]*[+*]\s*\)\s*[+*]|\(\?:[^)]*[+*]\)[+*]|\[[^\]]+\][+*]\s*\)\s*[+*])",
     mode: Mode::Always,
     unless: &["(?i)", "regexp.MustCompile"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1703,6 +1753,7 @@ SastRule {
     pattern: r#"(?i)(?:tmpnam\s*\(|mktemp\s*\(|tempnam\s*\(|["']/tmp/[a-z0-9_.-]+["']|os\.path\.join\s*\(\s*["']/tmp["']|new\s+File\s*\(\s*["']/tmp/)"#,
     mode: Mode::Always,
     unless: &["mkstemp", "NamedTemporaryFile", "TemporaryDirectory", "mkdtemp", "MkdirTemp", "createTempFile"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1745,6 +1796,7 @@ SastRule {
     pattern: r"(?i)\b(?:Class\.forName|getMethod|getDeclaredMethod|newInstance|importlib\.import_module|__import__|getattr|Activator\.CreateInstance|Type\.GetType|call_user_func(?:_array)?|new\s+\$|\$\$|constantize|const_get|Object\.const_get|send\s*\()\s*\(?(?P<arg>[^)\n]*)",
     mode: Mode::Tainted,
     unless: &["HANDLERS", "allowlist", "ALLOWED"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1790,6 +1842,7 @@ SastRule {
     pattern: r"(?i)(?:nodeIntegration\s*:\s*true|contextIsolation\s*:\s*false|webSecurity\s*:\s*false|allowRunningInsecureContent\s*:\s*true|enableRemoteModule\s*:\s*true)",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1834,6 +1887,7 @@ SastRule {
     pattern: r"(?i)(?:introspection\s*:\s*true|GraphiQL\s*:\s*true|graphiql\s*:\s*true|playground\s*:\s*true|__schema)",
     mode: Mode::Always,
     unless: &["NODE_ENV", "production", "process.env"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1876,6 +1930,7 @@ SastRule {
     pattern: r"(?i)\b(?:token|signature|hmac|secret|apikey|api_key|password|digest|mac|hash)\w*\s*(?:===?|!==?|\.equals\s*\(|\.Equals\s*\(|==)\s*",
     mode: Mode::Always,
     unless: &["timingSafeEqual", "compare_digest", "ConstantTimeCompare", "MessageDigest.isEqual", "hash_equals", "secure_compare", "== null", "=== null", "== undefined", "!== undefined", "!= null", "=== ''", "== \"\""],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1915,6 +1970,7 @@ SastRule {
     pattern: r"(?:\bstrcpy\s*\(|\bstrcat\s*\(|\bsprintf\s*\(|\bgets\s*\(|\bvsprintf\s*\(|\bscanf\s*\(\s*\x22%s)",
     mode: Mode::Always,
     unless: &["strncpy", "strlcpy", "snprintf"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1959,6 +2015,7 @@ SastRule {
     pattern: r"(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql|jdbc:[a-z]+)://[A-Za-z0-9_.-]+:[^@\s'\x22/]{4,}@",
     mode: Mode::Always,
     unless: &["password@", ":password", "user:pass@", "<password>", "${", "%s", "changeme", "example.com"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -1997,6 +2054,7 @@ SastRule {
     pattern: r"(?i)(?:setJavaScriptEnabled\s*\(\s*true|addJavascriptInterface\s*\(|setAllowFileAccessFromFileURLs\s*\(\s*true|setAllowUniversalAccessFromFileURLs\s*\(\s*true|setAllowFileAccess\s*\(\s*true)",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -2032,6 +2090,7 @@ SastRule {
     pattern: r"(?i)(?:chmod\s*\(\s*[^,]+,\s*0?o?7[0-7]7|chmod\s+(?:-R\s+)?7[0-7]7|os\.chmod\([^,]+,\s*0o?7[0-7]7|FileMode\s*\(\s*0?o?7[0-7]7|setReadable\s*\(\s*true\s*,\s*false|setWritable\s*\(\s*true\s*,\s*false|umask\s*\(\s*0\s*\))",
     mode: Mode::Always,
     unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -2071,6 +2130,7 @@ SastRule {
     pattern: r#"(?i)(?:app|router|route)\.(?:post|put|patch|delete)\s*\(\s*["'][^"']*(?:admin|user|account|role|permission|setting|config|delete|remove|password|token)[^"']*["']\s*,\s*(?:async\s*)?(?:function|\([^)]*\)\s*=>)"#,
     mode: Mode::Always,
     unless: &["requireAuth", "isAuthenticated", "authenticate", "authorize", "ensureLoggedIn", "passport", "guard", "verifyToken", "checkPermission"],
+    multiline: false,
     scan_tests: false,
 },
 
@@ -2105,9 +2165,10 @@ SastRule {
              a security decision, so read what is inside the `try` before judging.",
     },
     languages: WEB_LANGS,
-    pattern: r"(?i)(?:catch\s*\([^)]*\)\s*\{\s*\}|except[^:]*:\s*pass\b|catch\s*\{\s*\}|rescue\s*(?:=>\s*\w+)?\s*(?:#[^\n]*)?\n\s*end)",
+    pattern: r"(?i)(?:catch\s*\([^)]*\)\s*\{[ \t\r\n]*\}|catch[ \t]*\{[ \t\r\n]*\}|except[^:\n]*:[ \t]*(?:\r?\n[ \t]*)?pass\b|rescue[^\n]*\r?\n[ \t]*(?:#[^\n]*\r?\n[ \t]*)*end\b)",
     mode: Mode::Always,
     unless: &[],
+    multiline: true,
     scan_tests: false,
 },
 
@@ -2147,6 +2208,328 @@ SastRule {
     pattern: r"(?i)(?:res\.(?:send|json|write)|response\.(?:write|json)|return\s+jsonify|echo|print|Response\.Write)\s*\(?[^;\n]*(?:err(?:or)?\.(?:stack|message)|e\.(?:stack|message)|traceback\.format_exc|getStackTrace|ex\.ToString|\$e->getMessage|err\.Error\(\))",
     mode: Mode::Always,
     unless: &["NODE_ENV", "isDev", "development"],
+    multiline: false,
+    scan_tests: false,
+},
+
+
+// ══ Trust boundaries ════════════════════════════════════════════════════════
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-HEADER-INJECTION",
+        title: "Response header built from untrusted input",
+        cvss_vector: V_PARTIAL_INTEGRITY,
+        cwe: "CWE-113",
+        wstg: "WSTG-INPV-15",
+        owasp_2025: owasp::A05,
+        api_top10: None,
+        description:
+            "A response header is assembled from a value the application did not produce. \
+             Headers are separated by CRLF, so a value containing a carriage return and a \
+             line feed does not stay inside the header it was written into — it ends that \
+             header and begins another, and everything after it is parsed as part of the \
+             response rather than as data. That is enough to add a Set-Cookie the \
+             application never issued, to inject a body that the browser renders in the \
+             origin's context, or to split one response into two so that an intermediary \
+             caches attacker-chosen content against a legitimate URL. Where a proxy or CDN \
+             sits in front of the application, the poisoned entry is then served to \
+             everyone who requests that path.",
+        remediation:
+            "Strip carriage returns and line feeds from any value that reaches a header, or \
+             reject it outright — there is no legitimate reason for either character to \
+             appear in a header value.\n\n\
+             ```\n\
+             // Node — most frameworks reject these already; do not defeat that by writing raw\n\
+             res.setHeader('X-Trace', String(id).replace(/[\\r\\n]/g, ''));\n\n\
+             # Python\n\
+             value = raw.replace('\\r', '').replace('\\n', '')\n\
+             ```\n\n\
+             Prefer the framework's own header API over writing the raw response, and where \
+             the value is one of a known set — a redirect target, a content type — map it \
+             through an allow-list instead of passing the input through at all.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/113.html",
+            "https://owasp.org/www-community/attacks/HTTP_Response_Splitting",
+        ],
+        confidence: Confidence::Firm,
+        triage_note:
+            "The engine traced request data into a header value. Most modern frameworks \
+             reject CRLF in headers themselves, so confirm which API is in use before \
+             rating this — a raw socket write and an express `setHeader` are not the same risk.",
+    },
+    languages: WEB_LANGS,
+    pattern: r#"(?i)\b(?:setHeader|addHeader|writeHead|set_header|add_header|header)\s*\((?P<arg>[^)]*(?:\+|\$\{|%s|\.format\(|f["'])[^)]*)\)"#,
+    mode: Mode::Tainted,
+    unless: &[
+        "Access-Control", "replace(/[\\r\\n]", "encodeURIComponent", "quote(", "strip()",
+    ],
+    multiline: false,
+    scan_tests: false,
+},
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-TRUSTED-PROXY-HEADER",
+        title: "Access decision made on a client-controlled forwarding header",
+        cvss_vector: V_CONDITIONAL,
+        cwe: "CWE-348",
+        wstg: "WSTG-ATHZ-02",
+        owasp_2025: owasp::A01,
+        api_top10: Some("API1:2023-Broken Object Level Authorization"),
+        description:
+            "A security decision is being made on the value of an X-Forwarded-For, \
+             X-Real-IP or similar header. These headers are set by proxies to record the \
+             original client address, but they are ordinary request headers: anyone can \
+             send one, with any value. Unless a trusted proxy is known to overwrite the \
+             header on the way in — not append to it, overwrite it — the value is chosen \
+             by the caller. Treating it as the client's true address turns an IP allow-list \
+             into a header the attacker fills in, and does the same to any rate limit, \
+             audit trail or geographic restriction keyed on it. The common deployment \
+             mistake makes this worse: a proxy that appends leaves a comma-separated list \
+             whose left-most entry is the one the client supplied.",
+        remediation:
+            "Take the client address from the connection rather than from a header, and \
+             where a proxy genuinely sits in front, configure the framework's trusted-proxy \
+             support so it resolves the address for you.\n\n\
+             ```\n\
+             // Express — behind a known proxy\n\
+             app.set('trust proxy', 1);   // then use req.ip, never the raw header\n\n\
+             # Django\n\
+             USE_X_FORWARDED_HOST = False   # and set SECURE_PROXY_SSL_HEADER only if the\n\
+                                            # proxy overwrites it on every request\n\
+             ```\n\n\
+             If the header must be read directly, take the right-most value appended by \
+             your own proxy rather than the left-most, and never use an IP address as the \
+             sole factor in an authorisation decision.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/348.html",
+            "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authorization_Testing/02-Testing_for_Bypassing_Authorization_Schema",
+        ],
+        confidence: Confidence::Firm,
+        triage_note:
+            "Reading a forwarding header is not itself a defect — logging it is normal. What \
+             matters is whether the value reaches a decision: check whether this feeds an \
+             allow-list, a rate limiter or an audit record before rating it.",
+    },
+    languages: WEB_LANGS,
+    // Either order: the decision can read the header (`allow.includes(hdr)`) or
+    // the header can lead (`hdr === TRUSTED`). Matching only one direction
+    // missed the more common of the two.
+    pattern: r#"(?i)(?:["']x-(?:forwarded-for|real-ip|client-ip|forwarded-host|originating-ip)["'][^\n]{0,80}(?:===?|!==?|\.includes\s*\(|\.contains\s*\(|\.startsWith\s*\(|\ballow|\badmin|\btrust|\bwhitelist|\ballowlist)|(?:===?|!==?|\.includes\s*\(|\.contains\s*\(|\.startsWith\s*\(|\ballow|\badmin|\btrust|\bwhitelist|\ballowlist)[^\n]{0,80}["']x-(?:forwarded-for|real-ip|client-ip|forwarded-host|originating-ip)["'])"#,
+    mode: Mode::Always,
+    unless: &["trust proxy", "trustProxy", "logger.", "log.", "console.", "TRUSTED_PROXIES"],
+    multiline: false,
+    scan_tests: false,
+},
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-HOST-HEADER-TRUST",
+        title: "Absolute URL built from the request's Host header",
+        cvss_vector: V_LIMITED_UI,
+        cwe: "CWE-644",
+        wstg: "WSTG-INPV-17",
+        owasp_2025: owasp::A05,
+        api_top10: None,
+        description:
+            "A link or absolute URL is being constructed from the Host header of the \
+             incoming request. That header is supplied by the client, and unless the server \
+             is configured to reject requests whose Host does not match a known name, it can \
+             be set to any value. The consequence shows up wherever the generated URL is \
+             sent somewhere the attacker can reach: a password-reset mail built this way \
+             carries a link pointing at the attacker's host, and a victim who follows it \
+             hands over a valid reset token. The same pattern poisons a shared cache when \
+             the generated URL is embedded in a cacheable response, so a single request can \
+             affect every later visitor to that path.",
+        remediation:
+            "Build absolute URLs from configuration rather than from the request, and \
+             validate the Host header against a list of names the application answers to.\n\n\
+             ```\n\
+             # Django — reject unknown hosts, then build from a configured base\n\
+             ALLOWED_HOSTS = ['app.example.com']\n\
+             url = f\"{settings.SITE_URL}/reset/{token}\"\n\n\
+             // Node\n\
+             const url = `${process.env.PUBLIC_BASE_URL}/reset/${token}`;\n\
+             ```\n\n\
+             Where a single deployment genuinely serves several hostnames, resolve the base \
+             URL from the matched route or tenant record rather than echoing back whatever \
+             the client sent.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/644.html",
+            "https://portswigger.net/web-security/host-header",
+        ],
+        confidence: Confidence::Tentative,
+        triage_note:
+            "Reading the Host header is normal in multi-tenant routing. This matters only \
+             where the value ends up in a link that leaves the application — follow the \
+             variable to a mail template or a redirect before rating it.",
+    },
+    languages: WEB_LANGS,
+    pattern: r#"(?i)(?:req(?:uest)?\.(?:headers?)\s*(?:\[\s*["']host["']\s*\]|\.get\s*\(\s*["']host["'])|request\.get_host\s*\(\s*\)|\$_SERVER\s*\[\s*["']HTTP_HOST["']\s*\]|getServerName\s*\(\s*\))[^\n]{0,80}(?:https?://|\burl\b|\blink\b|\breset\b|\bconfirm\b|\bredirect\b|\bhref\b)"#,
+    mode: Mode::Always,
+    unless: &["ALLOWED_HOSTS", "allowlist", "allowList", "trusted", "validate_host", "TRUSTED_HOSTS"],
+    multiline: false,
+    scan_tests: false,
+},
+
+// ══ Credential storage and secrets ══════════════════════════════════════════
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-FAST-HASH-PASSWORD",
+        title: "Password stored with a general-purpose hash",
+        cvss_vector: V_DISCLOSURE,
+        cwe: "CWE-916",
+        wstg: "WSTG-CRYP-04",
+        owasp_2025: owasp::A04,
+        api_top10: None,
+        description:
+            "A password is being hashed with a general-purpose digest such as MD5, SHA-1 or \
+             SHA-256. These functions are designed to be fast, and that is exactly the \
+             property that makes them wrong here: speed is the attacker's advantage once a \
+             database is stolen. Commodity hardware computes billions of SHA-256 digests per \
+             second, so a stolen table of them is not a set of secrets, it is a list of \
+             passwords with a delay attached. Adding a salt does not change this — a salt \
+             defeats precomputed tables and forces the attacker to attack each row \
+             separately, but it does nothing to slow down the attack on any single row. What \
+             is needed is a function that is deliberately expensive to compute and whose cost \
+             can be raised as hardware improves.",
+        remediation:
+            "Use a password hashing function with a tunable work factor. Argon2id is the \
+             current recommendation; bcrypt and scrypt remain acceptable.\n\n\
+             ```\n\
+             # Python\n\
+             from argon2 import PasswordHasher\n\
+             ph = PasswordHasher(); stored = ph.hash(password)\n\n\
+             // Node\n\
+             const stored = await bcrypt.hash(password, 12);\n\n\
+             // Java\n\
+             new BCryptPasswordEncoder(12).encode(password);\n\
+             ```\n\n\
+             Existing hashes cannot be converted, since the plaintext is gone. Re-hash each \
+             password at the next successful login, and store the algorithm alongside the \
+             hash so both forms can be verified during the migration.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/916.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html",
+        ],
+        confidence: Confidence::Firm,
+        triage_note:
+            "The match is a digest call on a value named like a password. Confirm it is the \
+             stored credential rather than a lookup key or a comparison against an \
+             already-hashed value before rating it.",
+    },
+    languages: WEB_LANGS,
+    pattern: r#"(?i)(?:createHash\s*\(\s*["'](?:md5|sha-?1|sha-?256|sha-?512)["']\s*\)[^\n]{0,60}\b(?:password|passwd|pwd)\b|hashlib\.(?:md5|sha1|sha256|sha512)\s*\([^)\n]*\b(?:password|passwd|pwd)\b|\b(?:md5|sha1|sha256)\s*\(\s*\$?(?:password|passwd|pwd)\b|MessageDigest\.getInstance\s*\(\s*["'](?:MD5|SHA-?1|SHA-?256)["']\s*\)[^\n]{0,60}\b(?:password|passwd|pwd)\b)"#,
+    mode: Mode::Always,
+    unless: &["bcrypt", "scrypt", "argon2", "Argon2", "pbkdf2", "PBKDF2"],
+    multiline: false,
+    scan_tests: false,
+},
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-HARDCODED-FRAMEWORK-SECRET",
+        title: "Framework signing key committed to source",
+        cvss_vector: V_INTEGRITY,
+        cwe: "CWE-798",
+        wstg: "WSTG-SESS-01",
+        owasp_2025: owasp::A07,
+        api_top10: Some("API2:2023-Broken Authentication"),
+        description:
+            "A signing key is written as a literal in the source. Frameworks use this one \
+             value to authenticate everything they hand to a client: session cookies, CSRF \
+             tokens, signed URLs, password-reset links and remember-me cookies are all \
+             validated by recomputing a signature with it. Anyone who knows the key can mint \
+             any of them — a session cookie naming any user, including an administrator, \
+             which the application will accept as genuine because the signature verifies. \
+             Because it lives in the repository it is known to everyone with read access, it \
+             is preserved in the history after any later fix, and it is copied into every \
+             fork, clone and CI cache of that tree. A key committed once should be treated \
+             as public from the moment of the commit.",
+        remediation:
+            "Load the key from the environment or a secret manager, and rotate the committed \
+             one — rotation is the part that actually fixes it, since the old value remains \
+             in the git history.\n\n\
+             ```\n\
+             # Django\n\
+             SECRET_KEY = os.environ['DJANGO_SECRET_KEY']\n\n\
+             // Node\n\
+             app.use(session({ secret: process.env.SESSION_SECRET }));\n\
+             ```\n\n\
+             Generate the replacement from a cryptographic source, not by typing at the \
+             keyboard. Rotating invalidates every existing session and signed link, so \
+             schedule it accordingly — and expect users to be logged out.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/798.html",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html",
+        ],
+        confidence: Confidence::Firm,
+        triage_note:
+            "A literal assigned to a name the frameworks use for signing. Check whether the \
+             value is a real key or a development placeholder — and note that a placeholder \
+             shipped to production is the same finding.",
+    },
+    languages: WEB_LANGS,
+    pattern: r#"(?i)\b(?:SECRET_KEY|secret_key_base|JWT_SECRET|jwtSecret|SESSION_SECRET|sessionSecret|APP_SECRET|appSecret|COOKIE_SECRET)\s*[=:]\s*["'][^"'\n]{8,}["']"#,
+    mode: Mode::Always,
+    unless: &[
+        "os.environ", "process.env", "getenv", "ENV[", "Environment.Get", "config(",
+        "vault", "${", "<", "changeme", "your-secret", "REPLACE",
+    ],
+    multiline: false,
+    scan_tests: false,
+},
+
+SastRule {
+    spec: CodeSpec {
+        id: "SENTINEL-ASSERT-FOR-SECURITY",
+        title: "Authorisation enforced with an assert statement",
+        cvss_vector: V_CONDITIONAL,
+        cwe: "CWE-617",
+        wstg: "WSTG-ATHZ-02",
+        owasp_2025: owasp::A01,
+        api_top10: Some("API5:2023-Broken Function Level Authorization"),
+        description:
+            "A permission check is written as an `assert`. Python removes assert statements \
+             entirely when the interpreter runs with optimisation enabled — `python -O`, or \
+             the PYTHONOPTIMIZE environment variable, both of which are common in container \
+             images and production entrypoints precisely because they are presented as a \
+             performance setting. When that happens the line does not fail differently, it \
+             is not compiled at all, and the function proceeds as though the check had \
+             passed. The result is an authorisation control that is present in the source, \
+             visible in review, and absent at runtime in exactly the environment where it \
+             matters. Nothing in the application logs its own absence.",
+        remediation:
+            "Make the check an ordinary conditional that raises, so it cannot be compiled \
+             away.\n\n\
+             ```\n\
+             # Instead of:\n\
+             assert user.is_admin\n\n\
+             # write:\n\
+             if not user.is_admin:\n\
+                 raise PermissionDenied('admin role required')\n\
+             ```\n\n\
+             Keep `assert` for statements about invariants the code itself guarantees — the \
+             things that are checks on the programmer, not on the caller. Anything enforcing \
+             a decision about a request belongs in a conditional, and ideally behind the \
+             framework's own permission decorator so it is applied consistently.",
+        references: &[
+            "https://cwe.mitre.org/data/definitions/617.html",
+            "https://docs.python.org/3/reference/simple_stmts.html#the-assert-statement",
+        ],
+        confidence: Confidence::Firm,
+        triage_note:
+            "The severity here depends entirely on how the application is started: harmless \
+             under plain `python`, a complete bypass under `python -O`. Check the Dockerfile \
+             or entrypoint before deciding.",
+    },
+    languages: &[Language::Python],
+    pattern: r#"(?m)^\s*assert\s+[^\n]{0,120}\b(?:is_admin|is_superuser|is_staff|is_authenticated|has_perm|has_permission|permission|authoriz|authoris|\brole\b|is_owner|current_user)"#,
+    mode: Mode::Always,
+    unless: &[],
+    multiline: false,
     scan_tests: false,
 },
 

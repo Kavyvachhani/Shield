@@ -127,10 +127,10 @@ const STAGE_TAG: Record<StageStatus['stageType'], string> = {
 
 const STATE_ICON: Record<StageState, React.ReactNode> = {
   pending: <Clock size={14} style={{ color: 'var(--text-muted)' }} />,
-  running: <Loader2 size={14} className="pulse" style={{ color: 'var(--cyan)' }} />,
-  done:    <CheckCircle2 size={14} style={{ color: 'var(--emerald)' }} />,
-  skipped: <SkipForward size={14} style={{ color: 'var(--amber)' }} />,
-  failed:  <XCircle size={14} style={{ color: 'var(--red)' }} />,
+  running: <Loader2 size={14} className="pulse" style={{ color: 'var(--accent)' }} />,
+  done:    <CheckCircle2 size={14} style={{ color: 'var(--success)' }} />,
+  skipped: <SkipForward size={14} style={{ color: 'var(--warning)' }} />,
+  failed:  <XCircle size={14} style={{ color: 'var(--danger)' }} />,
 };
 
 export function ScanConsoleScreen({
@@ -404,11 +404,11 @@ export function ScanConsoleScreen({
             spellCheck={false}
             rows={7}
             placeholder={CONFIG_PLACEHOLDER}
-            style={{ width: '100%', padding: '10px 12px', background: 'var(--bg-base)', border: `1px solid ${configError ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-code)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", outline: 'none', resize: 'vertical', lineHeight: 1.6 }}
+            style={{ width: '100%', padding: '10px 12px', background: 'var(--bg-base)', border: `1px solid ${configError ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", outline: 'none', resize: 'vertical', lineHeight: 1.6 }}
           />
 
           {configError && (
-            <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 6 }}>{configError}</div>
+            <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{configError}</div>
           )}
 
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
@@ -485,12 +485,12 @@ export function ScanConsoleScreen({
               background: showConfig ? 'rgba(34,211,238,0.1)' : 'var(--bg-elevated)',
               border: `1px solid ${showConfig ? 'rgba(34,211,238,0.3)' : 'var(--border)'}`,
               borderRadius: 'var(--radius-sm)',
-              color: showConfig ? 'var(--cyan)' : 'var(--text-secondary)',
+              color: showConfig ? 'var(--accent)' : 'var(--text-secondary)',
               display: 'flex', alignItems: 'center', gap: 6, opacity: isRunning ? 0.45 : 1,
             }}>
             <SlidersHorizontal size={13} /> Engine config
             {configText.trim() && (
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--cyan)' }} />
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
             )}
           </button>
 
@@ -513,7 +513,7 @@ export function ScanConsoleScreen({
 
       {/* Auth banner */}
       {!isAuthorized && (
-        <div style={{ padding: '10px 14px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--amber)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ padding: '10px 14px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <ShieldOff size={14} /> DAST stages are disabled — complete the Authorization Gate to unlock ZAP and Nuclei.
         </div>
       )}
@@ -548,12 +548,12 @@ export function ScanConsoleScreen({
               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 4 }}>{s.label}</div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.4 }}>{s.message}</div>
               {s.findings > 0 && (
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--cyan)', background: 'rgba(34,211,238,0.1)', padding: '3px 8px', borderRadius: 99, display: 'inline-block' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'rgba(34,211,238,0.1)', padding: '3px 8px', borderRadius: 99, display: 'inline-block' }}>
                   {s.findings} finding{s.findings !== 1 ? 's' : ''}
                 </div>
               )}
               {isDastLocked && (
-                <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
                   <ShieldOff size={11} /> Locked
                 </div>
               )}
@@ -565,15 +565,15 @@ export function ScanConsoleScreen({
       {/* Totals */}
       {totalFindings > 0 && (
         <div style={{ display: 'flex', gap: 16 }}>
-          <StatPill label="Total Findings" value={totalFindings} color="var(--cyan)" />
-          <StatPill label="Critical+High" value={criticalHigh} color="var(--red)" />
+          <StatPill label="Total Findings" value={totalFindings} color="var(--accent)" />
+          <StatPill label="Critical+High" value={criticalHigh} color="var(--danger)" />
         </div>
       )}
 
       {/* Log console */}
       <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 220 }}>
         <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: isRunning ? 'var(--emerald)' : 'var(--text-muted)' }} className={isRunning ? 'pulse' : ''} />
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: isRunning ? 'var(--success)' : 'var(--text-muted)' }} className={isRunning ? 'pulse' : ''} />
           <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Engine Log Stream
           </span>
@@ -590,7 +590,7 @@ export function ScanConsoleScreen({
                 <span style={{ color: 'var(--text-muted)', marginRight: 8 }}>{new Date(log.timestamp).toISOString().split('T')[1].slice(0, 8)}</span>
                 <span style={{
                   marginRight: 8, fontWeight: 700,
-                  color: log.level === 'error' ? 'var(--red)' : log.level === 'warn' ? 'var(--amber)' : 'var(--cyan)',
+                  color: log.level === 'error' ? 'var(--danger)' : log.level === 'warn' ? 'var(--warning)' : 'var(--accent)',
                 }}>
                   [{log.level.toUpperCase()}]
                 </span>
@@ -615,14 +615,14 @@ function StatPill({ label, value, color }: { label: string; value: number; color
 }
 
 const startBtnStyle: React.CSSProperties = {
-  padding: '9px 20px', background: 'var(--cyan)', color: '#020817',
+  padding: '9px 20px', background: 'var(--accent)', color: '#020817',
   border: 'none', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 13,
   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
   boxShadow: '0 0 16px rgba(34,211,238,0.2)',
 };
 
 const cancelBtnStyle: React.CSSProperties = {
-  padding: '9px 20px', background: 'rgba(239,68,68,0.12)', color: 'var(--red)',
+  padding: '9px 20px', background: 'rgba(239,68,68,0.12)', color: 'var(--danger)',
   border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: 13,
   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
 };

@@ -954,6 +954,76 @@ mod tests {
         );
     }
 
+    /// The drift this guards, and why it is silent both ways.
+    ///
+    /// `profiles::ALL_STAGES` decides what a scan profile may switch on — it
+    /// backs the engine picker in the UI and the validation in
+    /// `save_scan_profile`. This file decides what the pipeline actually runs.
+    /// Nothing connects the two, so each direction fails quietly:
+    ///
+    /// * A stage here but not in `ALL_STAGES` can never be switched off. It is
+    ///   absent from the engine list, `save_scan_profile` rejects any profile
+    ///   naming it, and it runs on every scan regardless — including the live
+    ///   engines, where "cannot be switched off" means traffic the analyst did
+    ///   not choose to send.
+    /// * A stage in `ALL_STAGES` but not here is offered in the picker, saved
+    ///   into a profile, and then silently does nothing. The scan reports
+    ///   success and the report says the engine ran, because `enabled_stages`
+    ///   only ever filters the list below — a name that is not in it is not a
+    ///   missing engine, it is a no-op.
+    ///
+    /// Both are the kind of failure that surfaces on an engagement rather than
+    /// in development, which is why this is an equality check and not a subset.
+    #[test]
+    fn the_stages_a_profile_can_select_are_exactly_the_stages_the_pipeline_runs() {
+        use crate::commands::profiles::ALL_STAGES;
+
+        let mut runnable: Vec<&str> =
+            BASELINE_STAGES.iter().chain(DAST_STAGES).copied().collect();
+        runnable.sort_unstable();
+
+        let mut selectable: Vec<&str> = ALL_STAGES.to_vec();
+        selectable.sort_unstable();
+
+        let unselectable: Vec<&&str> =
+            runnable.iter().filter(|s| !selectable.contains(s)).collect();
+        assert!(
+            unselectable.is_empty(),
+            "{unselectable:?} run on every scan but no profile can switch them off \
+             — add them to profiles::ALL_STAGES"
+        );
+
+        let inert: Vec<&&str> =
+            selectable.iter().filter(|s| !runnable.contains(s)).collect();
+        assert!(
+            inert.is_empty(),
+            "{inert:?} can be selected in a profile but the pipeline never runs them \
+             — add them to BASELINE_STAGES or DAST_STAGES, or drop them from ALL_STAGES"
+        );
+    }
+
+    /// `profiles` sorts stages into static and live to decide which ones the
+    /// RoE gate applies to. That classification has to agree with this file's,
+    /// or a live engine reaches a target under a profile that presented it as
+    /// reading local files only.
+    #[test]
+    fn the_two_files_agree_on_which_stages_touch_the_target() {
+        use crate::commands::profiles::{LIVE_STAGES, STATIC_STAGES as PROFILE_STATIC_STAGES};
+
+        for stage in LIVE_STAGES {
+            assert!(
+                DAST_STAGES.contains(stage) || *stage == "native",
+                "{stage} is gated as a live engine by profiles but is not one here"
+            );
+        }
+        for stage in PROFILE_STATIC_STAGES {
+            assert!(
+                !DAST_STAGES.contains(stage) && *stage != "native",
+                "{stage} is presented as a local-only engine but sends traffic to the target"
+            );
+        }
+    }
+
     #[test]
     fn stage_names_are_unique() {
         let mut all: Vec<&str> = BASELINE_STAGES.iter().chain(DAST_STAGES).copied().collect();

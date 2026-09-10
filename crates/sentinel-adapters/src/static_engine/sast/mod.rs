@@ -147,6 +147,13 @@ fn scan_file<'a>(
     let mut table = TaintTable::new(language);
     let mut state = lang::CommentState::new(language);
 
+    // Whole-file rules first. They are the ones whose weakness is defined by
+    // what follows the construct rather than by the construct alone, so no
+    // amount of care with a single line could express them.
+    for compiled in applicable.iter().filter(|c| c.rule.multiline) {
+        scan_whole_file(file, compiled, per_rule, suppressed);
+    }
+
     for (number, line) in file.content.lines().enumerate().map(|(i, l)| (i + 1, l)) {
         // The taint table must see every line, including ones it will not
         // report on — an assignment inside a commented block is not code, but a
@@ -165,6 +172,11 @@ fn scan_file<'a>(
 
         for compiled in applicable {
             let rule = compiled.rule;
+            // Already handled above, and matching again here would report the
+            // same weakness twice under one id.
+            if rule.multiline {
+                continue;
+            }
             if compiled.suppressors.iter().any(|s| line.contains(s)) {
                 continue;
             }
@@ -204,6 +216,52 @@ fn scan_file<'a>(
                 context: finding::context_lines(&file.content, number, 3),
             });
         }
+    }
+}
+
+/// Apply one whole-file rule.
+///
+/// Deliberately narrower than the per-line path. A multiline match can span an
+/// arbitrary amount of text, so the snippet is the match's first line rather
+/// than the whole span — an evidence block holding forty lines of a file is not
+/// evidence, it is a paste. Taint is not consulted: every rule that needs this
+/// facility so far is `Always`, and classifying a span rather than an argument
+/// would claim a flow the analysis never traced.
+fn scan_whole_file<'a>(
+    file: &'a SourceFile,
+    compiled: &'static CompiledRule,
+    per_rule: &mut HashMap<&'static str, Vec<CodeMatch<'a>>>,
+    suppressed: &mut HashMap<&'static str, usize>,
+) {
+    let rule = compiled.rule;
+    for m in compiled.pattern.find_iter(&file.content) {
+        let matched = m.as_str();
+        if compiled.suppressors.iter().any(|s| matched.contains(s)) {
+            continue;
+        }
+        // 1-indexed line of the match's start, from the newlines before it.
+        let line_no = file.content[..m.start()].matches('\n').count() + 1;
+        if is_suppression_annotated(file, line_no, rule.spec.id) {
+            *suppressed.entry(rule.spec.id).or_default() += 1;
+            continue;
+        }
+        let entry = per_rule.entry(rule.spec.id).or_default();
+        if entry.len() >= MAX_PER_RULE {
+            *suppressed.entry(rule.spec.id).or_default() += 1;
+            continue;
+        }
+        let first_line = matched.lines().next().unwrap_or(matched);
+        entry.push(CodeMatch {
+            file: &file.relative,
+            line: line_no,
+            snippet: finding::redact_snippet(first_line),
+            detail: format!(
+                "the block opened here is empty, so `{}` is discarded without being \
+                 handled, logged or re-raised",
+                first_line.trim()
+            ),
+            context: finding::context_lines(&file.content, line_no, 3),
+        });
     }
 }
 
@@ -454,6 +512,9 @@ pub fn compiled_rules() -> &'static [CompiledRule] {
             .collect()
     })
 }
+
+#[cfg(test)]
+mod corpus;
 
 #[cfg(test)]
 mod tests {
