@@ -10,13 +10,50 @@ pub struct TriggerScanInput {
     pub target_id: String,
     pub run_dast: bool,
     pub config_json: Option<String>,
+    /// The engines this run should use, from the selected scan profile.
+    ///
+    /// `None` means every stage, which is what a caller predating profiles
+    /// intended and what the pipeline did before this existed. An explicitly
+    /// empty list is rejected rather than silently running nothing.
+    #[serde(default)]
+    pub enabled_stages: Option<Vec<String>>,
 }
 
 /// Stages that run on every scan. Semgrep, Trivy and Gitleaks need a source
 /// repository and skip without one; Sentinel Native needs only the target URL,
 /// so it is what makes a URL-only engagement produce results at all.
 const BASELINE_STAGES: &[&str] = &[
-    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov", "native",
+    // The four built-in static engines come first. They need no installed
+    // binary, so they are the ones that actually run on a fresh machine — and
+    // before they existed, a source checkout with none of the external
+    // scanners present was assessed by nothing at all.
+    "code", "dependencies", "secrets", "infrastructure",
+    // The external engines then add what they add: a far larger rule registry,
+    // a second vulnerability database, provider-verified secrets, and a
+    // dedicated IaC policy set. Each skips cleanly when its binary is absent.
+    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov",
+    // Passive reconnaissance. Sends nothing to the target — every source it
+    // queries is a third party — so it sits with the static stages rather than
+    // behind the RoE gate, and it runs whether or not dynamic testing is on.
+    "recon",
+    // Sentinel Native needs only the target URL, so it is what makes a
+    // URL-only engagement produce results at all.
+    "native",
+];
+
+/// The stages that read local files and can therefore run concurrently.
+///
+/// Network stages stay sequential: they all make requests to the same target,
+/// and running them together would let their combined traffic exceed the rate
+/// limit the Rules of Engagement agreed, which is a safety guarantee rather
+/// than a performance setting.
+const STATIC_STAGE_NAMES: &[&str] = &[
+    "code", "dependencies", "secrets", "infrastructure",
+    "semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov",
+    // Recon reaches the network, but only third-party data sources — never the
+    // target — so its traffic cannot exceed the rate limit the RoE agreed and
+    // it belongs in the concurrent block.
+    "recon",
 ];
 
 /// The static analysers, which run concurrently.
@@ -27,7 +64,7 @@ const BASELINE_STAGES: &[&str] = &[
 /// make requests to the same target, and running them together would let their
 /// combined traffic exceed the rate limit the RoE agreed, which is a safety
 /// guarantee rather than a performance setting.
-const STATIC_STAGES: usize = 7;
+const STATIC_STAGES: usize = 12;
 
 /// How long any single stage may run before the pipeline abandons it.
 ///
@@ -105,6 +142,17 @@ pub async fn trigger_scan(
         }
     }
 
+    // A scan that runs no engine would complete, report zero findings, and look
+    // exactly like a clean result.
+    if let Some(stages) = input.enabled_stages.as_ref() {
+        if stages.is_empty() {
+            return Err(
+                "This scan profile enables no engines, so the run would report nothing found                  without having looked. Enable at least one engine before starting."
+                    .into(),
+            );
+        }
+    }
+
     let scan_run_id = new_id();
     let run_record = ScanRunRecord {
         id: scan_run_id.clone(),
@@ -131,6 +179,7 @@ pub async fn trigger_scan(
     let exceptions_clone = state.exceptions.clone();
     let config_json = input.config_json.unwrap_or_default();
     let run_dast = input.run_dast;
+    let enabled_stages = input.enabled_stages.clone();
     let run_id_clone = scan_run_id.clone();
     let target_id_clone = target_id.clone();
 
@@ -226,11 +275,44 @@ pub async fn trigger_scan(
         // installed still gets a real assessment rather than three skipped
         // stages. It stays wrapped in the RoE gate, which is what keeps it
         // honest — the gate refuses it when no authorization has been signed.
-        let stages: Vec<&str> = BASELINE_STAGES
+        // The profile's selection is applied here rather than at the call site
+        // so that the order stays the pipeline's — a profile is a set of
+        // engines, not a running order, and the concurrency below depends on
+        // the static stages coming first.
+        let selected: Vec<&str> = BASELINE_STAGES
             .iter()
             .chain(if run_dast { DAST_STAGES } else { &[] })
             .copied()
+            .filter(|stage| match &enabled_stages {
+                Some(list) => list.iter().any(|s| s == stage),
+                None => true,
+            })
             .collect();
+
+        // A stage the profile switched off is not the same as a stage that
+        // failed, and the coverage matrix has to be able to tell them apart —
+        // so the run says plainly which engines it was asked not to use.
+        let excluded: Vec<&str> = BASELINE_STAGES
+            .iter()
+            .chain(DAST_STAGES)
+            .copied()
+            .filter(|s| !selected.contains(s))
+            .collect();
+        if !excluded.is_empty() {
+            let _ = app.emit(EVENT_LOG, ScanLogPayload {
+                scan_run_id: run_id_clone.clone(),
+                stage: "pipeline".into(),
+                level: "info".into(),
+                message: format!(
+                    "{} engine(s) not run for this profile: {}. The coverage matrix records                      the checks they would have answered as untested.",
+                    excluded.len(),
+                    excluded.join(", ")
+                ),
+                timestamp: Utc::now(),
+            });
+        }
+
+        let stages = selected;
         let mut tally = PipelineTally::default();
 
         // Semgrep, Trivy and Gitleaks are three independent local file
@@ -243,43 +325,41 @@ pub async fn trigger_scan(
         // requests to the same target, and running them concurrently would
         // let their combined traffic exceed the RoE's agreed rate limit,
         // which is a safety guarantee, not just a performance one.
-        debug_assert_eq!(
-            &stages[..STATIC_STAGES],
-            &["semgrep", "trivy", "gitleaks", "osv", "trufflehog", "retirejs", "checkov"]
+        // Every stage in this list reads local files: none touches the network
+        // or shares state with another, so running them one after another was
+        // pure wasted wall clock. They are partitioned by name rather than by
+        // position because a profile can switch any of them off.
+        let (static_stages, network_stages): (Vec<&str>, Vec<&str>) =
+            stages.iter().partition(|s| STATIC_STAGE_NAMES.contains(s));
+        debug_assert!(
+            static_stages.len() <= STATIC_STAGES,
+            "the concurrent block must stay bounded"
         );
 
-        for (idx, stage_name) in stages[..STATIC_STAGES].iter().enumerate() {
+        for (idx, stage_name) in static_stages.iter().enumerate() {
             emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
         }
-        let (
-            semgrep_result, trivy_result, gitleaks_result,
-            osv_result, trufflehog_result, retirejs_result, checkov_result,
-        ) = tokio::join!(
-            run_stage_bounded("semgrep", &core_target, &config_json),
-            run_stage_bounded("trivy", &core_target, &config_json),
-            run_stage_bounded("gitleaks", &core_target, &config_json),
-            run_stage_bounded("osv", &core_target, &config_json),
-            run_stage_bounded("trufflehog", &core_target, &config_json),
-            run_stage_bounded("retirejs", &core_target, &config_json),
-            run_stage_bounded("checkov", &core_target, &config_json),
-        );
-        for (stage_name, result) in [
-            ("semgrep", semgrep_result),
-            ("trivy", trivy_result),
-            ("gitleaks", gitleaks_result),
-            ("osv", osv_result),
-            ("trufflehog", trufflehog_result),
-            ("retirejs", retirejs_result),
-            ("checkov", checkov_result),
-        ] {
+        // `join_all` rather than `tokio::join!`: the tuple form needs the stage
+        // list to be known at compile time, and a scan profile decides it at
+        // run time. The futures still run concurrently on this one task, and —
+        // unlike spawning — they can borrow the target and the configuration
+        // rather than each needing an owned copy.
+        let static_results = futures_util::future::join_all(
+            static_stages
+                .iter()
+                .map(|stage| run_stage_bounded(stage, &core_target, &config_json)),
+        )
+        .await;
+
+        for (stage_name, result) in static_stages.iter().copied().zip(static_results) {
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
                 stage_name, result, &mut tally, &register,
             ).await;
         }
 
-        for (offset, stage_name) in stages[STATIC_STAGES..].iter().enumerate() {
-            let idx = offset + STATIC_STAGES;
+        for (offset, stage_name) in network_stages.iter().enumerate() {
+            let idx = offset + static_stages.len();
             emit_stage_starting(&app, &run_id_clone, stage_name, idx, &tally);
 
             // A stage that never returns takes the whole pipeline with it: no
@@ -528,6 +608,14 @@ async fn run_stage_for(
     use sentinel_adapters::auth_gated_runner::AuthGatedDastRunner;
 
     match stage {
+        // Built-in static engines: compiled in, so these never skip.
+        "code"           => sentinel_adapters::static_engine::sast::NativeSastAdapter.run(target, config_json).await,
+        "dependencies"   => sentinel_adapters::static_engine::sca::NativeScaAdapter.run(target, config_json).await,
+        "secrets"        => sentinel_adapters::static_engine::secrets::NativeSecretsAdapter.run(target, config_json).await,
+        "infrastructure" => sentinel_adapters::static_engine::iac::NativeIacAdapter.run(target, config_json).await,
+        // Not behind the gate: every request it makes goes to a third-party
+        // data source, and none to the target.
+        "recon"          => sentinel_adapters::recon::ReconAdapter.run(target, config_json).await,
         "semgrep"     => sentinel_adapters::semgrep::SemgrepAdapter.run(target, config_json).await,
         "native"      => AuthGatedDastRunner::new(sentinel_adapters::native::NativeCheckAdapter).run(target, config_json).await,
         "trivy"       => sentinel_adapters::trivy::TrivyAdapter.run(target, config_json).await,
@@ -588,7 +676,15 @@ fn emit_stage_starting(
         scan_run_id: run_id.to_string(),
         stage: stage_name.to_string(),
         level: "info".into(),
-        message: format!("[{}] Invoking user-installed {} binary...", idx + 1, stage_name),
+        message: format!(
+            "[{}] {}",
+            idx + 1,
+            if is_builtin(stage_name) {
+                format!("Running built-in {}...", engine_label(stage_name))
+            } else {
+                format!("Invoking user-installed {stage_name} binary...")
+            }
+        ),
         timestamp: Utc::now(),
     });
 }
@@ -735,6 +831,11 @@ fn is_skip_message(msg: &str) -> bool {
 /// Engine name as used by the checklist coverage catalog.
 fn engine_name(stage: &str) -> &'static str {
     match stage {
+        "code" => "Sentinel Code",
+        "dependencies" => "Sentinel Dependencies",
+        "secrets" => "Sentinel Secrets",
+        "infrastructure" => "Sentinel Infrastructure",
+        "recon" => "Sentinel Recon",
         "semgrep" => "Semgrep",
         "trivy" => "Trivy",
         "gitleaks" => "Gitleaks",
@@ -751,9 +852,24 @@ fn engine_name(stage: &str) -> &'static str {
     }
 }
 
+/// Whether this stage is compiled into the application rather than shelling
+/// out to a binary the analyst had to install.
+///
+/// Only affects what the console says, but saying "invoking user-installed
+/// Sentinel Code binary" would send somebody looking for a binary that does not
+/// exist when a stage reports nothing.
+fn is_builtin(stage: &str) -> bool {
+    matches!(stage, "code" | "dependencies" | "secrets" | "infrastructure" | "native")
+}
+
 /// Human-readable stage label for the scan console.
 fn engine_label(stage: &str) -> &'static str {
     match stage {
+        "code" => "Sentinel Code analysis",
+        "dependencies" => "Sentinel dependency audit",
+        "secrets" => "Sentinel secret scan",
+        "infrastructure" => "Sentinel infrastructure audit",
+        "recon" => "Passive attack-surface discovery",
         "semgrep" => "Semgrep SAST",
         "trivy" => "Trivy dependency audit",
         "gitleaks" => "Gitleaks secret scan",

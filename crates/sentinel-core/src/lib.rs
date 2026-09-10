@@ -5,5 +5,6 @@ pub mod parser;
 pub mod dedup;
 pub mod exceptions;
 pub mod scoring;
+pub mod threat;
 pub mod ml;
 pub mod reporting;

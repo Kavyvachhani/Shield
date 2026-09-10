@@ -15,6 +15,7 @@ import type {
   TriageInput, TriageOutcome, FindingFilter, GenerateReportInput,
   ExceptionRecord, RecordExceptionInput, ImportFindingsInput, ImportOutcome,
   ScanStageUpdatePayload, ScanLogPayload, ScanCompletePayload, ScanErrorPayload,
+  ScanProfile, SaveScanProfileInput, EngineDescriptor,
 } from '../types';
 
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -68,8 +69,16 @@ export const api = {
     invoke('get_authorization_record', { targetId }),
 
   // Scans
-  triggerScan: (targetId: string, runDast: boolean, configJson?: string): Promise<string> =>
-    invoke('trigger_scan', { input: { targetId, runDast, configJson } }),
+  //
+  // `enabledStages` comes from the selected profile. Omitting it runs every
+  // engine, which is what the pipeline did before profiles existed.
+  triggerScan: (
+    targetId: string,
+    runDast: boolean,
+    configJson?: string,
+    enabledStages?: string[],
+  ): Promise<string> =>
+    invoke('trigger_scan', { input: { targetId, runDast, configJson, enabledStages } }),
 
   cancelScan: (scanRunId: string): Promise<void> =>
     invoke('cancel_scan', { scanRunId }),
@@ -126,6 +135,23 @@ export const api = {
 
   defaultExportDir: (): Promise<string> =>
     invoke('default_export_dir'),
+
+  // Scan profiles. The built-in presets are compile-time data prepended by the
+  // backend, so a release that corrects one takes effect immediately rather
+  // than leaving a stale copy in the database.
+  listScanProfiles: (): Promise<ScanProfile[]> =>
+    invoke('list_scan_profiles'),
+
+  saveScanProfile: (input: SaveScanProfileInput): Promise<ScanProfile> =>
+    invoke('save_scan_profile', { input }),
+
+  deleteScanProfile: (profileId: string): Promise<void> =>
+    invoke('delete_scan_profile', { profileId }),
+
+  // Served from the backend rather than hardcoded here, so adding an engine
+  // cannot leave the picker showing the old list.
+  listEngines: (): Promise<EngineDescriptor[]> =>
+    invoke('list_engines'),
 
   // Checklist coverage
   getCoverage: (scanId: string): Promise<CoverageReport> =>

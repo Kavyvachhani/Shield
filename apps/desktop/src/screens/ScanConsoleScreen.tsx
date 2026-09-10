@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal } from 'lucide-react';
+import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles } from 'lucide-react';
 import type {
-  Target, AuthorizationRecord, ScanLogPayload, ScanStage, StageState,
+  Target, AuthorizationRecord, ScanLogPayload, ScanProfile, ScanStage, StageState,
 } from '../types';
 import { api, events } from '../lib/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -9,13 +9,33 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 interface Props {
   target: Target;
   authRecord: AuthorizationRecord | null;
+  /**
+   * The saved configuration this run should use.
+   *
+   * `null` runs every engine, which is what the console did before profiles
+   * existed and remains the right default for somebody who has not chosen one.
+   */
+  profile: ScanProfile | null;
+  onChooseProfile: () => void;
   onScanComplete: (scanRunId: string) => void;
 }
 
 interface StageStatus {
   stage: ScanStage;
   label: string;
+  /** How the engine is obtained, which is what the tag on the card says. */
   stageType: 'static' | 'builtin' | 'dast';
+  /**
+   * Whether this engine sends requests to the target and is therefore behind
+   * the authorisation gate.
+   *
+   * Carried explicitly rather than inferred from `stageType`. It was inferred,
+   * and the inference was "anything not external is gated" — which was right
+   * while the only built-in engine was the live one, and became wrong the
+   * moment four built-in engines that read local files were added. They would
+   * have rendered permanently locked behind an authorisation they do not need.
+   */
+  gated: boolean;
   state: StageState;
   findings: number;
   message: string;
@@ -26,18 +46,23 @@ interface StageStatus {
 // its progress and its failures are both invisible — which is exactly how the
 // native engine came to look like it was doing nothing.
 const STAGE_DEFS: StageStatus[] = [
-  { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'osv',         label: 'OSV-Scanner SCA',    stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'trufflehog',  label: 'TruffleHog Verified',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'retirejs',    label: 'retire.js Libraries',stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'checkov',     label: 'Checkov IaC',        stageType: 'static',  state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', state: 'pending', findings: 0, message: 'Waiting...' },
-  { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'nikto_dast',  label: 'Nikto Web Server',   stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
-  { stage: 'testssl_dast',label: 'testssl.sh TLS',     stageType: 'dast',    state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'code',           label: 'Sentinel Code',           stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'dependencies',   label: 'Sentinel Dependencies',   stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'secrets',        label: 'Sentinel Secrets',        stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'infrastructure', label: 'Sentinel Infrastructure', stageType: 'builtin', gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'recon',          label: 'Passive recon',           stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'semgrep',     label: 'Semgrep SAST',      stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'trivy',       label: 'Trivy SCA',          stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'gitleaks',    label: 'Gitleaks Secrets',   stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'osv',         label: 'OSV-Scanner SCA',    stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'trufflehog',  label: 'TruffleHog Verified',stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'retirejs',    label: 'retire.js Libraries',stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'checkov',     label: 'Checkov IaC',        stageType: 'static',  gated: false, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'native',      label: 'Sentinel Native',    stageType: 'builtin', gated: true, state: 'pending', findings: 0, message: 'Waiting...' },
+  { stage: 'zap_dast',    label: 'OWASP ZAP DAST',     stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'nuclei_dast', label: 'Nuclei Templates',   stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'nikto_dast',  label: 'Nikto Web Server',   stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
+  { stage: 'testssl_dast',label: 'testssl.sh TLS',     stageType: 'dast',    gated: true, state: 'pending', findings: 0, message: 'Requires signed RoE' },
 ];
 
 // How long to wait for the first engine event before warning. The pipeline
@@ -108,12 +133,21 @@ const STATE_ICON: Record<StageState, React.ReactNode> = {
   failed:  <XCircle size={14} style={{ color: 'var(--red)' }} />,
 };
 
-export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props) {
+export function ScanConsoleScreen({
+  target, authRecord, profile, onChooseProfile, onScanComplete,
+}: Props) {
   const [stages, setStages] = useState<StageStatus[]>(STAGE_DEFS);
+  // A card for an engine the profile has switched off would sit on "Waiting…"
+  // for the whole run, which reads as a stalled stage rather than an excluded
+  // one. With no profile chosen everything runs, so everything is shown.
+  const visibleStages = profile
+    ? stages.filter((s) => profile.enabledStages.includes(s.stage))
+    : stages;
   const [logs, setLogs] = useState<ScanLogPayload[]>([]);
   const [scanRunId, setScanRunId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runDast, setRunDast] = useState(false);
+
 
   // Per-scan engine configuration, sent to the pipeline as `configJson`.
   //
@@ -285,7 +319,9 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     sawEventRef.current = false;
     if (watchdogRef.current) clearTimeout(watchdogRef.current);
 
-    const dast = runDast && isAuthorized;
+    // A profile that does not enable dynamic testing must not have it turned on
+    // by a switch left set from a previous run.
+    const dast = runDast && isAuthorized && (profile ? profile.runDast : true);
     localLog(`Requesting scan of ${target.baseUrl} (DAST ${dast ? 'on' : 'off'})...`);
 
     // If the engine has said nothing at all after this long, the run is not
@@ -308,7 +344,15 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
     }, WATCHDOG_SECONDS * 1000);
 
     try {
-      const id = await api.triggerScan(target.id, dast, configText.trim() || undefined);
+      // The profile decides which engines run and supplies the configuration;
+      // anything typed into the box below overrides the profile's own JSON, so
+      // a one-off adjustment does not require saving a new profile.
+      const id = await api.triggerScan(
+        target.id,
+        dast,
+        configText.trim() || profile?.configJson || undefined,
+        profile?.enabledStages,
+      );
       setScanRunId(id);
       localLog(`Scan accepted by the engine — run id ${id}`);
     } catch (err) {
@@ -379,6 +423,30 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
         </div>
       )}
 
+      {/* Which configuration this run uses. Shown before the launch button
+          rather than buried in a settings panel: "which profile was that scan
+          run with" is the first question asked of an unexpected result. */}
+      <div className="card card-tight between wrap">
+        <div className="col" style={{ gap: 2 }}>
+          <div className="row">
+            <Sparkles size={14} style={{ color: 'var(--accent)' }} />
+            <strong>{profile ? profile.name : 'Every engine'}</strong>
+            {profile?.builtin && <span className="badge badge-outline">Built in</span>}
+            <span className="badge badge-outline tabular">
+              {(profile ? profile.enabledStages.length : stages.length)} engines
+            </span>
+          </div>
+          <span className="hint">
+            {profile
+              ? profile.description
+              : 'No profile selected, so every engine runs. Pick one to shorten the run, or to keep live traffic off entirely.'}
+          </span>
+        </div>
+        <button className="btn btn-sm" onClick={onChooseProfile} disabled={isRunning}>
+          {profile ? 'Change profile' : 'Choose a profile'}
+        </button>
+      </div>
+
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -387,17 +455,26 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/* DAST toggle — only if authorized */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isAuthorized ? 'pointer' : 'not-allowed', opacity: isAuthorized ? 1 : 0.45 }}>
-            <input
-              type="checkbox" checked={runDast} disabled={!isAuthorized}
-              onChange={(e) => setRunDast(e.target.checked)}
-              style={{ accentColor: 'var(--cyan)', width: 14, height: 14 }}
-            />
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              {isAuthorized ? <Shield size={13} style={{ color: 'var(--emerald)' }} /> : <ShieldOff size={13} style={{ color: 'var(--amber)' }} />}
-              Include DAST {!isAuthorized && '(sign RoE first)'}
+          {/* A profile that declares itself source-only must not have live
+              testing switched on by a control left set from a previous run. */}
+          {(!profile || profile.runDast) && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isAuthorized ? 'pointer' : 'not-allowed', opacity: isAuthorized ? 1 : 0.45 }}>
+              <input
+                type="checkbox" checked={runDast} disabled={!isAuthorized}
+                onChange={(e) => setRunDast(e.target.checked)}
+                style={{ accentColor: 'var(--accent)', width: 14, height: 14 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {isAuthorized ? <Shield size={13} style={{ color: 'var(--success)' }} /> : <ShieldOff size={13} style={{ color: 'var(--warning)' }} />}
+                Include DAST {!isAuthorized && '(record authorisation first)'}
+              </span>
+            </label>
+          )}
+          {profile && !profile.runDast && (
+            <span className="badge badge-outline" title="This profile reads local files and public sources only">
+              <ShieldOff size={10} /> No live traffic
             </span>
-          </label>
+          )}
 
           <button
             onClick={() => setShowConfig(v => !v)}
@@ -447,12 +524,14 @@ export function ScanConsoleScreen({ target, authRecord, onScanComplete }: Props)
         </div>
       )}
 
-      {/* Stage cards grid */}
+      {/* Stage cards. Only the engines this profile runs: a card that will
+          never move is worse than no card, because it reads as a stall. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {stages.map((s) => {
-          // The native engine is auth-gated too — it makes real requests to the
-          // target, so it needs the same signed RoE the DAST stages do.
-          const isDastLocked = s.stageType !== 'static' && !isAuthorized;
+        {visibleStages.map((s) => {
+          // The native engine is gated like the external DAST ones: it makes
+          // real requests to the target. The built-in *static* engines are not
+          // — they read local files and reach no network the gate governs.
+          const isDastLocked = s.gated && !isAuthorized;
           return (
             <div key={s.stage} className="card" style={{
               padding: '14px 16px',

@@ -3674,12 +3674,13 @@ dependencies = [
 
 [[package]]
 name = "sentinel-adapters"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
  "keyring",
+ "regex",
  "reqwest 0.12.28",
  "rustls",
  "sentinel-core",
@@ -3698,7 +3699,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3715,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "sentinel-db"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3731,10 +3732,11 @@ dependencies = [
 
 [[package]]
 name = "sentinel-desktop"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures-util",
  "rusqlite",
  "sentinel-adapters",
  "sentinel-core",
@@ -3751,15 +3753,17 @@ dependencies = [
 
 [[package]]
 name = "sentinel-mcp"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "sentinel-adapters",
  "sentinel-core",
  "sentinel-db",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

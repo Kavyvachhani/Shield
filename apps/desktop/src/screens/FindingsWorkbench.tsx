@@ -7,6 +7,7 @@ import type {
   Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord, Evidence,
 } from '../types';
 import { api } from '../lib/tauri';
+import { Callout, Modal } from '../components/ui';
 
 interface Props {
   scanId: string;
@@ -64,6 +65,21 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
   const [evidences, setEvidences] = useState<Evidence[]>([]);
   const [evidenceFor, setEvidenceFor] = useState<string | null>(null);
 
+  // Dismissing a false positive from the row, without first opening the detail
+  // panel and filling in the full triage form. This is the most frequent single
+  // action in a triage pass and it was six interactions deep — which is how an
+  // analyst ends up not recording dismissals at all, and re-triaging the same
+  // noise on every re-scan.
+  //
+  // It still demands a reason and a name. An exception with no rationale is not
+  // auditable, and this one governs every future scan of the target: the speed
+  // is in getting to the form, not in skipping it.
+  const [quickDismiss, setQuickDismiss] = useState<Finding | null>(null);
+  const [quickReason, setQuickReason] = useState('');
+  const [quickAnalyst, setQuickAnalyst] = useState('');
+  const [quickError, setQuickError] = useState('');
+  const [quickBusy, setQuickBusy] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const filter: FindingFilter = {
@@ -98,6 +114,32 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
 
   /** Whether the chosen status records a decision that outlives this scan. */
   const recordsException = EXCEPTION_STATUSES.includes(triageStatus);
+
+  /** Record a false positive against the target, straight from the row. */
+  async function submitQuickDismiss() {
+    if (!quickDismiss) return;
+    if (!quickReason.trim() || !quickAnalyst.trim()) {
+      setQuickError('Both a reason and your name are required — this decision is recorded against the target and applies to every future scan.');
+      return;
+    }
+    setQuickBusy(true);
+    setQuickError('');
+    try {
+      await api.triageFinding({
+        findingId: quickDismiss.id,
+        newStatus: 'False Positive',
+        triageNote: quickReason.trim(),
+        analystName: quickAnalyst.trim(),
+      });
+      setQuickDismiss(null);
+      setQuickReason('');
+      await load();
+      await loadExceptions();
+    } catch (err) {
+      setQuickError(String(err));
+    }
+    setQuickBusy(false);
+  }
 
   async function submitTriage() {
     if (!selected) return;
@@ -366,8 +408,25 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: '9px 12px' }}>
-                      <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
+                      <div className="row" style={{ gap: 2 }}>
+                        {f.status !== 'False Positive' && (
+                          <button
+                            className="btn btn-ghost btn-icon btn-sm"
+                            title="Not a real issue — dismiss it, and keep it dismissed on every future scan"
+                            aria-label={`Dismiss "${f.title}" as a false positive`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setQuickDismiss(f);
+                              setQuickReason('');
+                              setQuickError('');
+                            }}
+                          >
+                            <ShieldOff size={13} />
+                          </button>
+                        )}
+                        <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -561,6 +620,70 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
           </div>
         )}
       </div>
+      {quickDismiss && (
+        <Modal
+          title="Dismiss as a false positive"
+          onClose={() => setQuickDismiss(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setQuickDismiss(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitQuickDismiss} disabled={quickBusy}>
+                <ShieldOff size={14} /> Dismiss and remember
+              </button>
+            </>
+          }
+        >
+          <div className="stack">
+            <div className="card card-tight">
+              <div className="row" style={{ marginBottom: 6 }}>
+                <span className={`badge ${SEV_COLORS[quickDismiss.severity] || 'badge-info'}`}>
+                  {quickDismiss.severity}
+                </span>
+                <strong>{quickDismiss.title}</strong>
+              </div>
+              <div className="mono dim small truncate">{quickDismiss.affectedComponent}</div>
+            </div>
+
+            <Callout tone="warning">
+              This removes the finding from <strong>every</strong> deliverable — the counts, the
+              posture score and the remediation roadmap — and the report discloses only that a
+              dismissal was made, not what it was. The decision is recorded against the target
+              rather than this scan, so the next assessment applies it automatically instead of
+              raising the same finding with a new id. Withdraw it from the exception register if
+              you change your mind.
+            </Callout>
+
+            <div className="field">
+              <label className="label" htmlFor="quick-reason">Why is this not a real issue?</label>
+              <textarea
+                id="quick-reason"
+                className="textarea"
+                value={quickReason}
+                onChange={(e) => { setQuickReason(e.target.value); setQuickError(''); }}
+                placeholder="The value is a compile-time constant read from a build flag, not from a request — traced in src/config.ts:14."
+                autoFocus
+              />
+              <span className="hint">
+                Required. This is what an auditor reads when they ask why a finding is absent from
+                the report, and what you read when the same finding appears again in six months.
+              </span>
+            </div>
+
+            <div className="field">
+              <label className="label" htmlFor="quick-analyst">Your name</label>
+              <input
+                id="quick-analyst"
+                className="input"
+                value={quickAnalyst}
+                onChange={(e) => { setQuickAnalyst(e.target.value); setQuickError(''); }}
+                placeholder="A. Analyst"
+              />
+            </div>
+
+            {quickError && <Callout tone="danger">{quickError}</Callout>}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

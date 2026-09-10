@@ -62,6 +62,32 @@ pub struct AuthorizationRecord {
     pub roe_document_hash: String,
 }
 
+/// A saved answer to "how should this scan be run?".
+///
+/// Held separately from the target because the same target is scanned
+/// differently at different points in an engagement — a quick triage before a
+/// call, a full run for the report — and because the same profile is used
+/// across every target in a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProfileRecord {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Built-in profiles ship with the application and cannot be edited or
+    /// deleted: an analyst who picks "Full assessment" expects it to still mean
+    /// what it says.
+    pub builtin: bool,
+    pub run_dast: bool,
+    /// Stage identifiers, validated against the pipeline's own list on save.
+    pub enabled_stages: Vec<String>,
+    /// `DastConfig` as JSON, validated as parseable on save so a scan cannot
+    /// fail on it after the Rules of Engagement have been signed.
+    pub config_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanRunStatus {
@@ -227,6 +253,13 @@ pub struct AppState {
     /// a decision the analyst took on one scan has to still hold on the next
     /// one, where every finding id has changed.
     pub exceptions: Arc<RwLock<HashMap<String, ExceptionRecord>>>,
+    /// The analyst's saved scan configurations, keyed by profile id.
+    ///
+    /// Holds only profiles the analyst created; the built-in presets are
+    /// compile-time data and are prepended when the list is served, so a
+    /// release that adds or corrects one takes effect immediately instead of
+    /// leaving a stale copy in every existing database.
+    pub scan_profiles: Arc<RwLock<HashMap<String, ScanProfileRecord>>>,
     /// Active scan task handles: scan_run_id → abort handle
     pub active_scans: Arc<RwLock<HashMap<String, tokio::task::AbortHandle>>>,
     /// Durable storage. Every mutation is written through so an engagement —
@@ -266,6 +299,9 @@ impl AppState {
             )),
             exceptions: Arc::new(RwLock::new(
                 loaded.exceptions.into_iter().map(|e| (e.id.clone(), e)).collect(),
+            )),
+            scan_profiles: Arc::new(RwLock::new(
+                loaded.scan_profiles.into_iter().map(|p| (p.id.clone(), p)).collect(),
             )),
             active_scans: Arc::new(RwLock::new(HashMap::new())),
             store: Arc::new(store),

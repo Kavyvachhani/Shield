@@ -1,11 +1,22 @@
 //! ScanOrchestrator — state machine for full-pipeline scan runs.
 //!
 //! Dispatch order:
-//!   1. Static adapters (SAST/SCA/Secrets): Semgrep → Trivy → Gitleaks
-//!      These run on local files; no network access; no auth gate needed.
-//!   2. DAST adapters (ZAP, Nuclei): wrapped in `AuthGatedDastRunner`.
-//!      These are only started when ALL static stages succeed or the caller
-//!      explicitly opts in via `run_dast = true`.
+//!   1. The built-in static engines: Sentinel Code → Dependencies → Secrets →
+//!      Infrastructure. These are compiled in, so they run on every machine and
+//!      never skip. They go first so the console shows real results within
+//!      seconds even where no optional binary is installed.
+//!   2. The external static adapters: Semgrep → Trivy → Gitleaks. Each skips
+//!      cleanly when its binary is absent, and adds breadth the built-in
+//!      engines do not have — a larger rule registry, an offline vulnerability
+//!      database, provider-verified secrets.
+//!   3. DAST adapters (Sentinel Native, ZAP, Nuclei): wrapped in
+//!      `AuthGatedDastRunner`, and only started when the caller opts in via
+//!      `run_dast = true`. The gate is enforced regardless of that flag.
+//!
+//! Everything up to step 3 reads local files: no network access, no auth gate.
+//! The one exception is the dependency engine, which sends package names and
+//! versions to the advisory database and degrades to a stated coverage gap
+//! when it cannot reach it.
 //!
 //! Progress events are emitted via `tokio::sync::mpsc` so the Tauri UI can
 //! stream console updates without blocking.
@@ -13,6 +24,10 @@
 use crate::adapter_trait::ScannerAdapter;
 use crate::auth_gated_runner::AuthGatedDastRunner;
 use crate::native::NativeCheckAdapter;
+use crate::static_engine::iac::NativeIacAdapter;
+use crate::static_engine::sast::NativeSastAdapter;
+use crate::static_engine::sca::NativeScaAdapter;
+use crate::static_engine::secrets::NativeSecretsAdapter;
 use crate::zap::ZapDastAdapter;
 use crate::nuclei::NucleiDastAdapter;
 use crate::semgrep::SemgrepAdapter;
@@ -31,6 +46,15 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanStage {
+    /// Built-in source analysis. Needs no installed binary, so unlike the four
+    /// stages below it never skips on a fresh machine.
+    Code,
+    /// Built-in lockfile resolution and advisory matching.
+    Dependencies,
+    /// Built-in committed-credential detection.
+    Secrets,
+    /// Built-in container, cloud and CI configuration analysis.
+    Infrastructure,
     Semgrep,
     Trivy,
     Gitleaks,
@@ -45,6 +69,10 @@ impl ScanStage {
     /// Engine name as used by the checklist coverage catalog.
     pub fn engine_name(&self) -> &'static str {
         match self {
+            ScanStage::Code => "Sentinel Code",
+            ScanStage::Dependencies => "Sentinel Dependencies",
+            ScanStage::Secrets => "Sentinel Secrets",
+            ScanStage::Infrastructure => "Sentinel Infrastructure",
             ScanStage::Semgrep => "Semgrep",
             ScanStage::Trivy => "Trivy",
             ScanStage::Gitleaks => "Gitleaks",
@@ -57,6 +85,10 @@ impl ScanStage {
     /// Human-readable stage label for the scan console.
     pub fn label(&self) -> &'static str {
         match self {
+            ScanStage::Code => "Sentinel Code analysis",
+            ScanStage::Dependencies => "Sentinel dependency audit",
+            ScanStage::Secrets => "Sentinel secret scan",
+            ScanStage::Infrastructure => "Sentinel infrastructure audit",
             ScanStage::Semgrep => "Semgrep SAST",
             ScanStage::Trivy => "Trivy dependency audit",
             ScanStage::Gitleaks => "Gitleaks secret scan",
@@ -158,7 +190,32 @@ impl ScanOrchestrator {
 
         emit(ScanRunState::Pending, "Scan pipeline starting", 0, 0);
 
-        // ── STAGE 1: Semgrep SAST ────────────────────────────────────────────
+        // ── STAGES 1-4: the built-in static engines ──────────────────────────
+        //
+        // These run first because they always run. Ordering them ahead of the
+        // external scanners means the console shows real results within seconds
+        // even on a machine where every optional binary is missing.
+        for (stage, adapter) in [
+            (ScanStage::Code, &NativeSastAdapter as &dyn ScannerAdapter),
+            (ScanStage::Dependencies, &NativeScaAdapter),
+            (ScanStage::Secrets, &NativeSecretsAdapter),
+            (ScanStage::Infrastructure, &NativeIacAdapter),
+        ] {
+            let result = run_stage(
+                stage.clone(), adapter, target, config_json, &emit, &all_findings,
+            ).await;
+            let count = result.findings.len();
+            all_findings.extend(result.findings.iter().cloned());
+            stage_results.push(result);
+            emit(
+                ScanRunState::Running { stage: stage.clone() },
+                &format!("{} complete", stage.label()),
+                count,
+                all_findings.len(),
+            );
+        }
+
+        // ── STAGE 5: Semgrep SAST ────────────────────────────────────────────
         let semgrep_result = run_stage(
             ScanStage::Semgrep,
             &SemgrepAdapter,
@@ -295,7 +352,9 @@ async fn run_stage<A, F>(
     all_findings: &[Finding],
 ) -> StageResult
 where
-    A: ScannerAdapter,
+    // `?Sized` so the built-in engines can be dispatched from one loop over
+    // trait objects rather than four near-identical blocks.
+    A: ScannerAdapter + ?Sized,
     F: Fn(ScanRunState, &str, usize, usize),
 {
     let stage_label = format!("{:?}", stage);
@@ -392,7 +451,11 @@ mod tests {
         let run = result.unwrap();
         assert_eq!(run.final_state, ScanRunState::Completed);
         // All stages should have been attempted (skipped if tool absent)
-        assert_eq!(run.stage_results.len(), 3, "3 static stages expected");
+        assert_eq!(
+            run.stage_results.len(),
+            7,
+            "4 built-in static stages plus Semgrep, Trivy and Gitleaks"
+        );
         // A skipped stage must never be reported as executed coverage.
         for stage in &run.stage_results {
             if stage.skipped {

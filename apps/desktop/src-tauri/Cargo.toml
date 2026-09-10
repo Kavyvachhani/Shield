@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-desktop"
-version = "0.13.0"
+version = "0.14.0"
 description = "SentinelVAPT Desktop Shell"
 authors = ["SentinelVAPT Team"]
 edition = "2021"
@@ -16,6 +16,10 @@ sentinel-adapters = { path = "../../../crates/sentinel-adapters" }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 tokio       = { version = "1.38", features = ["full"] }
+# `join_all`: the pipeline decides how many static stages run at run time, and
+# `tokio::join!` needs its arity at compile time. Unlike spawning, this lets the
+# stage futures borrow the target and configuration instead of owning copies.
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 anyhow      = { workspace = true }
 chrono      = { workspace = true }
 uuid        = { workspace = true }

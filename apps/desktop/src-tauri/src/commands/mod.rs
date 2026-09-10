@@ -5,3 +5,4 @@ pub mod scan;
 pub mod exceptions;
 pub mod findings;
 pub mod reports;
+pub mod profiles;

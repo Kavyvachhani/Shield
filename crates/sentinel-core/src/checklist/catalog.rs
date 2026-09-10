@@ -56,6 +56,34 @@ pub mod engine {
     pub const TESTSSL: &str = "testssl.sh";
     /// Infrastructure-as-code misconfiguration — what the app is deployed onto.
     pub const CHECKOV: &str = "Checkov";
+
+    // ── Built-in static engines ──────────────────────────────────────────────
+    //
+    // These ship inside the application, so unlike every engine above them they
+    // are present on a fresh machine. That is the point: before they existed, a
+    // source checkout on a laptop with no Semgrep, Trivy, Gitleaks or Checkov
+    // installed was assessed by nothing at all, and four rows of this matrix
+    // read "Not Tested" for reasons that had nothing to do with the target.
+    //
+    // They do not replace the external engines. Semgrep's rule registry is far
+    // larger than the catalog here, Trivy carries an offline database, and
+    // TruffleHog verifies a secret against its provider rather than pattern
+    // matching it. Where both run, dedup treats agreement between them as the
+    // stronger claim it is.
+    /// Multi-language source analysis with intra-file dataflow.
+    pub const CODE: &str = "Sentinel Code";
+    /// Lockfile resolution matched against the OSV advisory database.
+    pub const DEPENDENCIES: &str = "Sentinel Dependencies";
+    /// Committed credential detection by provider format and by entropy.
+    pub const SECRETS: &str = "Sentinel Secrets";
+    /// Container, orchestration, cloud and CI configuration.
+    pub const INFRASTRUCTURE: &str = "Sentinel Infrastructure";
+
+    /// Passive attack-surface discovery from public sources. Sends nothing to
+    /// the target, so it answers the information-gathering cases that every
+    /// other engine can only answer once a scope has already been agreed.
+    pub const RECON: &str = "Sentinel Recon";
+
     pub const ANALYST: &str = "Analyst";
 }
 
@@ -115,32 +143,56 @@ const E_NATIVE_ZAP: &[&str] = &[engine::NATIVE, engine::ZAP];
 const E_NATIVE_NUCLEI: &[&str] = &[engine::NATIVE, engine::NUCLEI];
 const E_ZAP: &[&str] = &[engine::ZAP];
 const E_ZAP_NUCLEI: &[&str] = &[engine::ZAP, engine::NUCLEI];
-const E_ZAP_SEMGREP: &[&str] = &[engine::ZAP, engine::SEMGREP];
-const E_SEMGREP: &[&str] = &[engine::SEMGREP];
-const E_SEMGREP_ZAP_NUCLEI: &[&str] = &[engine::SEMGREP, engine::ZAP, engine::NUCLEI];
+const E_ZAP_SEMGREP: &[&str] = &[engine::ZAP, engine::CODE, engine::SEMGREP];
+const E_SEMGREP: &[&str] = &[engine::CODE, engine::SEMGREP];
+const E_SEMGREP_ZAP_NUCLEI: &[&str] = &[engine::CODE, engine::SEMGREP, engine::ZAP, engine::NUCLEI];
 /// Two independent vulnerability databases. A CVE both report is a stronger
 /// claim than one either reports alone, and dedup raises reachability when it
 /// sees two engines confirm the same weakness.
-const E_SCA: &[&str] = &[engine::TRIVY, engine::OSV];
+const E_SCA: &[&str] = &[engine::DEPENDENCIES, engine::TRIVY, engine::OSV];
 /// Pattern matching plus provider verification. Gitleaks finds candidates;
 /// TruffleHog establishes which of them currently authenticate.
-const E_SECRETS: &[&str] = &[engine::GITLEAKS, engine::TRUFFLEHOG];
+const E_SECRETS: &[&str] = &[engine::SECRETS, engine::GITLEAKS, engine::TRUFFLEHOG];
 const E_ANALYST: &[&str] = &[engine::ANALYST];
+/// Passive OSINT plus the human who reads it.
+const E_RECON_ANALYST: &[&str] = &[engine::RECON, engine::ANALYST];
+/// Applications found on the host, from three directions: the crawl, the
+/// spider, and the names public records already carry.
+const E_ENUMERATE: &[&str] = &[engine::NATIVE, engine::ZAP, engine::RECON];
 const E_NATIVE_ANALYST: &[&str] = &[engine::NATIVE, engine::ANALYST];
-const E_SEMGREP_ANALYST: &[&str] = &[engine::SEMGREP, engine::ANALYST];
+const E_SEMGREP_ANALYST: &[&str] = &[engine::CODE, engine::SEMGREP, engine::ANALYST];
 const E_ZAP_ANALYST: &[&str] = &[engine::ZAP, engine::ANALYST];
 
-// OWASP Top 10:2025 category strings (verified against owasp.org/Top10/2025).
-const A01: &str = "A01:2025-Broken Access Control";
-const A02: &str = "A02:2025-Security Misconfiguration";
-const A03: &str = "A03:2025-Software Supply Chain Failures";
-const A04: &str = "A04:2025-Cryptographic Failures";
-const A05: &str = "A05:2025-Injection";
-const A06: &str = "A06:2025-Insecure Design";
-const A07: &str = "A07:2025-Authentication Failures";
-const A08: &str = "A08:2025-Software or Data Integrity Failures";
-const A09: &str = "A09:2025-Security Logging and Alerting Failures";
-const A10: &str = "A10:2025-Mishandling of Exceptional Conditions";
+/// OWASP Top 10:2025 category strings, verified against owasp.org/Top10/2025.
+///
+/// Public because every engine that classifies a finding has to use the same
+/// strings this catalog does. When they were retyped per engine they drifted:
+/// the 2021 list numbered Injection A03 and Cryptographic Failures A02, the
+/// 2025 list numbers them A05 and A04, and an engine carrying the older
+/// numbering puts its findings in a category the coverage matrix does not have.
+/// Referencing these constants makes that mistake a compile error.
+pub mod owasp {
+    pub const A01: &str = "A01:2025-Broken Access Control";
+    pub const A02: &str = "A02:2025-Security Misconfiguration";
+    pub const A03: &str = "A03:2025-Software Supply Chain Failures";
+    pub const A04: &str = "A04:2025-Cryptographic Failures";
+    pub const A05: &str = "A05:2025-Injection";
+    pub const A06: &str = "A06:2025-Insecure Design";
+    pub const A07: &str = "A07:2025-Authentication Failures";
+    pub const A08: &str = "A08:2025-Software or Data Integrity Failures";
+    pub const A09: &str = "A09:2025-Security Logging and Alerting Failures";
+    pub const A10: &str = "A10:2025-Mishandling of Exceptional Conditions";
+
+    /// Every category, for validating that a finding's classification exists.
+    pub const ALL: &[&str] = &[A01, A02, A03, A04, A05, A06, A07, A08, A09, A10];
+
+    /// Whether `label` names a real OWASP Top 10:2025 category.
+    pub fn is_known(label: &str) -> bool {
+        ALL.contains(&label)
+    }
+}
+
+use owasp::{A01, A02, A03, A04, A05, A06, A07, A08, A09, A10};
 
 /// The full WSTG v4.2 test-case catalog with SentinelVAPT coverage declarations.
 pub const WSTG_CATALOG: &[ChecklistItem] = &[
@@ -148,7 +200,11 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-INFO-01", category_code: "INFO", category: "Information Gathering",
         name: "Conduct Search Engine Discovery Reconnaissance for Information Leakage",
-        coverage: Manual, engines: E_ANALYST, owasp_2025: A02, cwe: "CWE-200",
+        // Partial rather than Automated: the reconnaissance engine queries the
+        // public indexes and certificate transparency logs, which is the
+        // mechanical half. Reading what turned up — deciding whether an indexed
+        // document is sensitive — is still a person's judgement.
+        coverage: Partial, engines: E_RECON_ANALYST, owasp_2025: A02, cwe: "CWE-200",
         client_summary: "Check whether sensitive information about the application has been indexed by public search engines.",
     },
     ChecklistItem {
@@ -166,7 +222,7 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-INFO-04", category_code: "INFO", category: "Information Gathering",
         name: "Enumerate Applications on Webserver",
-        coverage: Partial, engines: E_NATIVE_ZAP, owasp_2025: A02, cwe: "CWE-200",
+        coverage: Partial, engines: E_ENUMERATE, owasp_2025: A02, cwe: "CWE-200",
         client_summary: "Discover additional applications or admin panels hosted on the same server.",
     },
     ChecklistItem {
@@ -210,7 +266,7 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "WSTG-CONF-01", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Test Network Infrastructure Configuration",
-        coverage: Partial, engines: &[engine::NATIVE, engine::NUCLEI, engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
+        coverage: Partial, engines: &[engine::NATIVE, engine::NUCLEI, engine::INFRASTRUCTURE, engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
         client_summary: "Review the hosting and network configuration for insecure defaults.",
     },
     ChecklistItem {
@@ -838,7 +894,7 @@ pub const WSTG_CATALOG: &[ChecklistItem] = &[
     ChecklistItem {
         id: "SV-IAC-01", category_code: "CONF", category: "Configuration & Deployment Management",
         name: "Infrastructure-as-Code Misconfiguration",
-        coverage: Automated, engines: &[engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
+        coverage: Automated, engines: &[engine::INFRASTRUCTURE, engine::CHECKOV], owasp_2025: A02, cwe: "CWE-16",
         client_summary: "Review the Terraform, Kubernetes and container definitions the application is deployed from, for resources that are public, unencrypted or over-privileged by declaration.",
     },
 ];

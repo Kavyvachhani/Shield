@@ -87,6 +87,11 @@ fn main() {
             commands::reports::default_export_dir,
             commands::reports::list_reports,
             commands::reports::print_report,
+            // Scan profiles — saved configurations, plus the built-in presets
+            commands::profiles::list_scan_profiles,
+            commands::profiles::save_scan_profile,
+            commands::profiles::delete_scan_profile,
+            commands::profiles::list_engines,
             // Checklist coverage
             commands::reports::get_coverage,
             commands::reports::get_checklist_catalog,

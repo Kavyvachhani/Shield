@@ -13,7 +13,8 @@
 //! schema tolerates record changes without a migration for every field.
 
 use crate::state::{
-    AuthorizationRecord, ProjectRecord, ReportRecord, ScanRunRecord, StoredFinding, TargetRecord,
+    AuthorizationRecord, ProjectRecord, ReportRecord, ScanProfileRecord, ScanRunRecord,
+    StoredFinding, TargetRecord,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
@@ -96,6 +97,16 @@ CREATE TABLE IF NOT EXISTS exceptions (
     json        TEXT NOT NULL
 );
 
+-- Saved scan configurations. Only the analyst's own: the built-in presets are
+-- compile-time data, so a release that corrects one takes effect at once
+-- rather than leaving a stale copy in every existing database.
+CREATE TABLE IF NOT EXISTS scan_profiles (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    json       TEXT NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exceptions_identity
     ON exceptions(target_id, fingerprint);
 CREATE INDEX IF NOT EXISTS idx_exceptions_target  ON exceptions(target_id);
@@ -115,6 +126,7 @@ pub struct LoadedState {
     pub findings: Vec<(String, StoredFinding)>,
     pub reports: Vec<ReportRecord>,
     pub exceptions: Vec<ExceptionRecord>,
+    pub scan_profiles: Vec<ScanProfileRecord>,
 }
 
 pub struct Store {
@@ -213,6 +225,22 @@ impl Store {
                 serde_json::to_string(r)?
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn save_scan_profile(&self, p: &ScanProfileRecord) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO scan_profiles (id, name, created_at, json) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, json=excluded.json",
+            params![p.id, p.name, p.created_at.to_rfc3339(), serde_json::to_string(p)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_scan_profile(&self, profile_id: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM scan_profiles WHERE id = ?1", params![profile_id])?;
         Ok(())
     }
 
@@ -333,6 +361,10 @@ impl Store {
             scan_runs: query_json(&conn, "SELECT json FROM scan_runs")?,
             reports: query_json(&conn, "SELECT json FROM reports")?,
             exceptions: query_json(&conn, "SELECT json FROM exceptions")?,
+            scan_profiles: query_json(
+                &conn,
+                "SELECT json FROM scan_profiles ORDER BY created_at",
+            )?,
             ..Default::default()
         };
 

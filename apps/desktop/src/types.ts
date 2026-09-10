@@ -144,7 +144,13 @@ export interface CoverageReport {
 
 export type ScanRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type ScanStage =
+  // Built-in static engines — compiled in, so these never skip.
+  | 'code' | 'dependencies' | 'secrets' | 'infrastructure'
+  // External static engines — skipped when the binary is absent.
   | 'semgrep' | 'trivy' | 'gitleaks' | 'osv' | 'trufflehog' | 'retirejs' | 'checkov'
+  // Passive reconnaissance: reaches third-party sources, never the target.
+  | 'recon'
+  // Live engines — every one behind the authorisation gate.
   | 'native'
   | 'zap_dast' | 'nuclei_dast' | 'nikto_dast' | 'testssl_dast'
   | 'pipeline';
@@ -375,4 +381,54 @@ export interface ScanErrorPayload {
   error: string;
   stage?: string;
   timestamp: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scan profiles — a saved answer to "how should this scan be run?"
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A named set of scan decisions: which engines to run, whether to send live
+ * traffic, and the crawl and rate settings.
+ *
+ * Six ship built in and cannot be edited or deleted — an analyst who picks
+ * "Full assessment" expects it to still mean what it says. Anything the analyst
+ * saves themselves is theirs to change.
+ */
+export interface ScanProfile {
+  id: string;
+  name: string;
+  description: string;
+  builtin: boolean;
+  runDast: boolean;
+  /** Stage identifiers, validated against the pipeline's own list on save. */
+  enabledStages: string[];
+  /** `DastConfig` as JSON. Validated as parseable before it is stored. */
+  configJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveScanProfileInput {
+  /** Present when updating one of the analyst's own profiles. */
+  id?: string;
+  name: string;
+  description?: string;
+  runDast: boolean;
+  enabledStages: string[];
+  configJson: string;
+}
+
+/** One engine, as described by the backend for the profile editor. */
+export interface EngineDescriptor {
+  stage: string;
+  label: string;
+  category: 'builtin' | 'external' | 'live';
+  /** Compiled into the application, so it is always available. */
+  builtIn: boolean;
+  /** Sends requests to the target, so it is behind the authorisation gate. */
+  reachesTarget: boolean;
+  description: string;
+  /** The binary that must be on PATH, for engines that need one. */
+  requiresBinary?: string;
 }
