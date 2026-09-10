@@ -26,6 +26,7 @@ import type {
 import { api } from '../lib/tauri';
 import {
   Callout, EmptyState, SeverityBadge, SeverityBar, Spinner, Stat,
+  RingChart, GlowStat, EngineCard,
 } from '../components/ui';
 import { SEVERITY_ORDER, countBySeverity, formatRelative } from '../lib/presentation';
 
@@ -167,11 +168,12 @@ export function DashboardScreen({ project, target, scanId, roeSigned, onNavigate
 
             <div className="grid grid-4">
               {SEVERITY_ORDER.map((s) => (
-                <Stat
+                <GlowStat
                   key={s}
                   label={s}
                   value={counts[s]}
                   tone={s.toLowerCase() as Lowercase<Severity>}
+                  glow={s === 'Critical' && counts.Critical > 0}
                   note={s === 'Critical' && counts.Critical > 0 ? 'Fix before release' : undefined}
                 />
               ))}
@@ -217,13 +219,7 @@ export function DashboardScreen({ project, target, scanId, roeSigned, onNavigate
                   {topFindings.map((f) => (
                     <button
                       key={f.id}
-                      className="nav-item"
-                      style={{
-                        borderRadius: 0,
-                        padding: 'var(--s-3) var(--s-5)',
-                        borderBottom: '1px solid var(--border)',
-                        alignItems: 'flex-start',
-                      }}
+                      className={`finding-row finding-row-${f.severity.toLowerCase()}`}
                       onClick={() => onNavigate('findings')}
                     >
                       <SeverityBadge severity={f.severity} />
@@ -233,7 +229,9 @@ export function DashboardScreen({ project, target, scanId, roeSigned, onNavigate
                         </span>
                         <span className="dim mono small truncate">{f.affectedComponent}</span>
                       </span>
-                      <span className="nav-count tabular">{f.priorityScore.toFixed(1)}</span>
+                      <span className="badge badge-outline tabular" style={{ fontWeight: 700 }}>
+                        {f.priorityScore.toFixed(1)}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -250,13 +248,21 @@ export function DashboardScreen({ project, target, scanId, roeSigned, onNavigate
 
               {coverage ? (
                 <>
-                  <div className="col" style={{ gap: 6 }}>
-                    <div className="between">
-                      <span className="small muted">Automated coverage of the WSTG catalogue</span>
-                      <span className="h2 tabular">{coverage.automatedCoveragePct.toFixed(0)}%</span>
-                    </div>
-                    <div className="meter">
-                      <span style={{ width: `${Math.min(coverage.automatedCoveragePct, 100)}%` }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-5)' }}>
+                    <RingChart
+                      value={coverage.automatedCoveragePct}
+                      size={82}
+                      strokeWidth={8}
+                      sub="Coverage"
+                    />
+                    <div className="grow col" style={{ gap: 6 }}>
+                      <div className="between">
+                        <span className="small muted">WSTG catalogue coverage</span>
+                        <span className="h2 tabular">{coverage.automatedCoveragePct.toFixed(0)}%</span>
+                      </div>
+                      <div className="meter-lg">
+                        <span style={{ width: `${Math.min(coverage.automatedCoveragePct, 100)}%` }} />
+                      </div>
                     </div>
                   </div>
 
@@ -321,17 +327,20 @@ export function DashboardScreen({ project, target, scanId, roeSigned, onNavigate
           is not — a missing engine never silently becomes a pass.
         </p>
 
-        <div className="row wrap" style={{ gap: 'var(--s-2)' }}>
-          {engines.map((e) => (
-            <span
-              key={e.stage}
-              className={`badge ${e.builtIn ? 'badge-accent' : 'badge-outline'}`}
-              title={e.description}
-            >
-              {e.builtIn ? <ShieldCheck size={11} /> : <span className="dot" style={{ background: 'var(--text-muted)' }} />}
-              {e.label}
-            </span>
-          ))}
+        <div className="engine-grid">
+          {engines.map((e) => {
+            const isMissing = missing.some((m) => m.stage === e.stage);
+            return (
+              <EngineCard
+                key={e.stage}
+                name={e.label}
+                category={e.builtIn ? 'Built-in' : e.reachesTarget ? 'DAST' : 'Static'}
+                isAvailable={!isMissing}
+                description={e.description}
+                installHint={e.requiresBinary ? `Requires ${e.requiresBinary} on PATH` : undefined}
+              />
+            );
+          })}
         </div>
 
         {missing.length > 0 && (

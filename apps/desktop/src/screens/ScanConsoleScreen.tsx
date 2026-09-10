@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles, KeyRound, Trash2, FolderGit2 } from 'lucide-react';
+import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles, KeyRound, Trash2, FolderGit2, Copy, Check } from 'lucide-react';
 import type {
   Target, AuthorizationRecord, ScanLogPayload, ScanProfile, ScanStage, StageState,
   EngineDescriptor, CredentialStatus,
 } from '../types';
 import { api, events } from '../lib/tauri';
+import { ProgressBar } from '../components/ui';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 
 interface Props {
@@ -18,7 +19,8 @@ interface Props {
    */
   profile: ScanProfile | null;
   onChooseProfile: () => void;
-  onScanComplete: (scanRunId: string) => void;
+  onScanComplete: (scanRunId: string, totalFindings?: number) => void;
+  onScanStateChange?: (running: boolean) => void;
 }
 
 interface StageStatus {
@@ -148,12 +150,6 @@ const CONFIG_PLACEHOLDER = `{
 
 const WATCHDOG_SECONDS = 20;
 
-const STAGE_TAG: Record<StageStatus['stageType'], string> = {
-  static:  '🔍 STATIC',
-  builtin: '🛡 BUILT-IN',
-  dast:    '⚡ DAST',
-};
-
 const STATE_ICON: Record<StageState, React.ReactNode> = {
   pending: <Clock size={14} style={{ color: 'var(--text-muted)' }} />,
   running: <Loader2 size={14} className="pulse" style={{ color: 'var(--accent)' }} />,
@@ -163,9 +159,10 @@ const STATE_ICON: Record<StageState, React.ReactNode> = {
 };
 
 export function ScanConsoleScreen({
-  target, authRecord, profile, onChooseProfile, onScanComplete,
+  target, authRecord, profile, onChooseProfile, onScanComplete, onScanStateChange,
 }: Props) {
   const [stages, setStages] = useState<StageStatus[]>([]);
+  const [copied, setCopied] = useState(false);
   const [enginesError, setEnginesError] = useState('');
   // Whether a credential is sitting in the OS keychain for this target.
   const [credStatus, setCredStatus] = useState<CredentialStatus | null>(null);
@@ -211,6 +208,10 @@ export function ScanConsoleScreen({
   // showed nothing, so the launch button stays disabled until they are up.
   const [listenersReady, setListenersReady] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onScanStateChange?.(isRunning);
+  }, [isRunning, onScanStateChange]);
   // Tracks whether any backend event has arrived for the current run, so a
   // pipeline that never reports in can be told apart from one that is simply
   // slow. Kept in a ref because the watchdog timer closes over it.
@@ -344,7 +345,7 @@ export function ScanConsoleScreen({
               `Scan finished in ${p.durationSeconds}s — ${p.totalFindings} finding` +
               `${p.totalFindings === 1 ? '' : 's'}, ${p.criticalHigh} Critical/High.`,
             );
-            onScanCompleteRef.current(p.scanRunId);
+            onScanCompleteRef.current(p.scanRunId, p.totalFindings);
           }),
           events.onError((p) => {
             sawEventRef.current = true;
@@ -685,6 +686,18 @@ export function ScanConsoleScreen({
         </div>
       )}
 
+      {/* Scan progress indicator */}
+      {(isRunning || visibleStages.some((s) => s.state === 'done' || s.state === 'skipped')) && (
+        <div style={{ padding: 'var(--s-3) var(--s-4)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+          <ProgressBar
+            value={visibleStages.filter((s) => s.state === 'done' || s.state === 'skipped').length}
+            max={visibleStages.length}
+            label={isRunning ? 'Scan Execution Progress' : 'Scan Finished'}
+            sub={`${visibleStages.filter((s) => s.state === 'done' || s.state === 'skipped').length} of ${visibleStages.length} engines completed`}
+          />
+        </div>
+      )}
+
       {/* Stage cards. Only the engines this profile runs: a card that will
           never move is worse than no card, because it reads as a stall. */}
       <div className="grid grid-3">
@@ -703,7 +716,9 @@ export function ScanConsoleScreen({
               <div className="col grow" style={{ gap: 2, minWidth: 0 }}>
                 <div className="row between" style={{ gap: 'var(--s-2)' }}>
                   <span className="stage-name truncate">{s.label}</span>
-                  <span className="badge badge-outline">{STAGE_TAG[s.stageType]}</span>
+                  <span className={`badge ${s.stageType === 'builtin' ? 'badge-accent' : s.stageType === 'dast' ? 'badge-high' : 'badge-outline'}`} style={{ fontSize: 9.5 }}>
+                    {s.stageType === 'builtin' ? 'BUILT-IN' : s.stageType === 'dast' ? 'DAST' : 'STATIC'}
+                  </span>
                 </div>
                 <span className="stage-state">{s.message}</span>
                 <div className="row" style={{ gap: 'var(--s-2)' }}>
@@ -731,7 +746,7 @@ export function ScanConsoleScreen({
             <span className="stat-value">{totalFindings}</span>
             <span className="stat-label">Total findings</span>
           </div>
-          <div className="stat stat-critical">
+          <div className="stat stat-critical glow-critical">
             <span className="stat-value">{criticalHigh}</span>
             <span className="stat-label">Critical + High</span>
           </div>
@@ -739,13 +754,36 @@ export function ScanConsoleScreen({
       )}
 
       {/* Log console */}
-      <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 220 }}>
-        <div className="card-header row" style={{ gap: 'var(--s-2)' }}>
-          <span
-            className={`dot ${isRunning ? 'pulse' : ''}`}
-            style={{ background: isRunning ? 'var(--success)' : 'var(--text-muted)' }}
-          />
-          <span className="label">Engine log stream</span>
+      <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 240 }}>
+        <div className="card-header row between" style={{ gap: 'var(--s-2)' }}>
+          <div className="row" style={{ gap: 'var(--s-2)' }}>
+            <span
+              className={`dot ${isRunning ? 'pulse' : ''}`}
+              style={{ background: isRunning ? 'var(--success)' : 'var(--text-muted)' }}
+            />
+            <span className="label">Engine log stream</span>
+            {logs.length > 0 && (
+              <span className="badge badge-outline tabular" style={{ fontSize: 10 }}>
+                {logs.length} lines
+              </span>
+            )}
+          </div>
+          {logs.length > 0 && (
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={() => {
+                const text = logs.map(l => `[${new Date(l.timestamp).toISOString().split('T')[1].slice(0, 8)}] [${l.level.toUpperCase()}] [${l.stage}] ${l.message}`).join('\n');
+                navigator.clipboard.writeText(text);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              title="Copy log text to clipboard"
+            >
+              {copied ? <Check size={12} style={{ color: 'var(--success)' }} /> : <Copy size={12} />}
+              {copied ? 'Copied' : 'Copy logs'}
+            </button>
+          )}
         </div>
         <div ref={logRef} className="log grow" style={{ border: 'none', borderRadius: 0 }}>
           {logs.length === 0 ? (

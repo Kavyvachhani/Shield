@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Search, ShieldQuestion } from 'lucide-react';
 import type { CheckResult, CheckStatus, CoverageReport } from '../types';
 import { api } from '../lib/tauri';
-import { EmptyState } from '../components/ui';
+import { EmptyState, RingChart, PillFilter } from '../components/ui';
 
 interface Props {
   scanId: string;
@@ -109,42 +109,52 @@ export function CoverageScreen({ scanId }: Props) {
       </div>
 
       <div className="card card-tight" style={{ marginBottom: 'var(--s-5)' }}>
-        <div className="between wrap" style={{ marginBottom: 'var(--s-2)', gap: 'var(--s-3)' }}>
-          <strong>{coverage.automatedCoveragePct.toFixed(0)}% of automatable checks exercised</strong>
-          <span className="dim small">
-            Engines: {coverage.enginesExecuted.join(', ') || 'none'}
-          </span>
-        </div>
-        <div className="severity-bar">
-          {STATUS_ORDER.map((status) => {
-            const value =
-              status === 'passed'
-                ? coverage.passed
-                : status === 'issues_found'
-                  ? coverage.issuesFound
-                  : status === 'manual_required'
-                    ? coverage.manualRequired
-                    : coverage.notTested;
-            if (!value) return null;
-            return (
-              <div
-                key={status}
-                title={`${STATUS_META[status].label}: ${value}`}
-                style={{ flexGrow: value, background: STATUS_META[status].color }}
-              />
-            );
-          })}
-        </div>
-        {coverage.enginesUnavailable.length > 0 && (
-          <div className="hint" style={{ marginTop: 'var(--s-2)' }}>
-            Install {coverage.enginesUnavailable.join(', ')} and re-run to close the remaining gaps.
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-5)' }}>
+          <RingChart
+            value={coverage.automatedCoveragePct}
+            size={84}
+            strokeWidth={8}
+            sub="Coverage"
+          />
+          <div className="grow col" style={{ gap: 'var(--s-2)' }}>
+            <div className="between wrap" style={{ gap: 'var(--s-3)' }}>
+              <strong>{coverage.automatedCoveragePct.toFixed(0)}% of automatable checks exercised</strong>
+              <span className="dim small">
+                Engines: {coverage.enginesExecuted.join(', ') || 'none'}
+              </span>
+            </div>
+            <div className="severity-bar">
+              {STATUS_ORDER.map((status) => {
+                const value =
+                  status === 'passed'
+                    ? coverage.passed
+                    : status === 'issues_found'
+                      ? coverage.issuesFound
+                      : status === 'manual_required'
+                        ? coverage.manualRequired
+                        : coverage.notTested;
+                if (!value) return null;
+                return (
+                  <div
+                    key={status}
+                    title={`${STATUS_META[status].label}: ${value}`}
+                    style={{ flexGrow: value, background: STATUS_META[status].color }}
+                  />
+                );
+              })}
+            </div>
+            {coverage.enginesUnavailable.length > 0 && (
+              <div className="hint" style={{ marginTop: 'var(--s-1)' }}>
+                Install {coverage.enginesUnavailable.join(', ')} and re-run to close the remaining gaps.
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
-      <div className="row wrap" style={{ marginBottom: 'var(--s-4)', gap: 'var(--s-2)' }}>
-        <div className="search" style={{ flex: '1 1 240px', minWidth: 200 }}>
-          <Search size={13} />
+      <div className="row wrap" style={{ marginBottom: 'var(--s-4)', gap: 'var(--s-3)', alignItems: 'center' }}>
+        <div className="search" style={{ flex: '1 1 260px', minWidth: 220 }}>
+          <Search size={14} />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -152,16 +162,17 @@ export function CoverageScreen({ scanId }: Props) {
             aria-label="Search coverage checks"
           />
         </div>
-        <FilterChip active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} label="All" />
-        {STATUS_ORDER.map((s) => (
-          <FilterChip
-            key={s}
-            active={statusFilter === s}
-            onClick={() => setStatusFilter(s)}
-            label={STATUS_META[s].label}
-            color={STATUS_META[s].color}
-          />
-        ))}
+        <PillFilter
+          options={[
+            { id: 'all', label: 'All', count: coverage.totalChecks },
+            { id: 'passed', label: 'Passed', count: coverage.passed, tone: 'low' },
+            { id: 'issues_found', label: 'Issues found', count: coverage.issuesFound, tone: 'critical' },
+            { id: 'manual_required', label: 'Manual review', count: coverage.manualRequired, tone: 'medium' },
+            { id: 'not_tested', label: 'Not tested', count: coverage.notTested, tone: 'info' },
+          ]}
+          value={statusFilter}
+          onChange={(val) => setStatusFilter(val as CheckStatus | 'all')}
+        />
       </div>
 
       {grouped.length === 0 && (
@@ -171,10 +182,11 @@ export function CoverageScreen({ scanId }: Props) {
       )}
 
       {grouped.map(([category, items]) => (
-        <section key={category} style={{ marginBottom: 'var(--s-6)' }}>
-          <h3 className="h3" style={{ marginBottom: 'var(--s-2)' }}>
-            {category} <span className="dim" style={{ fontWeight: 400 }}>({items.length})</span>
-          </h3>
+        <section key={category} style={{ marginBottom: 'var(--s-5)' }}>
+          <div className="row" style={{ gap: 'var(--s-2)', marginBottom: 'var(--s-2)' }}>
+            <h3 className="h3" style={{ fontSize: 13.5 }}>{category}</h3>
+            <span className="badge badge-outline tabular" style={{ fontSize: 10 }}>{items.length} checks</span>
+          </div>
           <div className="card card-flush">
             {items.map((r, i) => (
               <div
@@ -235,27 +247,3 @@ function Kpi({ label, value, status }: { label: string; value: number; status?: 
   );
 }
 
-function FilterChip({
-  active,
-  onClick,
-  label,
-  color,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  color?: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="btn btn-sm"
-      aria-pressed={active}
-      onClick={onClick}
-      style={active && color ? { borderColor: color, color } : undefined}
-    >
-      {color && <span className="dot" style={{ background: color }} />}
-      {label}
-    </button>
-  );
-}

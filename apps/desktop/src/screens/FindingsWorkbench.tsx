@@ -7,7 +7,7 @@ import type {
   Finding, FindingStatus, FindingFilter, TriageInput, ExceptionRecord, Evidence,
 } from '../types';
 import { api } from '../lib/tauri';
-import { Callout, Modal, EmptyState, Spinner, SeverityBadge } from '../components/ui';
+import { Callout, Modal, EmptyState, Spinner, SeverityBadge, PillFilter, RingChart } from '../components/ui';
 
 interface Props {
   scanId: string;
@@ -301,6 +301,23 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
           </span>
         </div>
 
+        {findings.length > 0 && (
+          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+            <PillFilter
+              options={[
+                { id: '', label: 'All', count: findings.length },
+                { id: 'Critical', label: 'Critical', count: findings.filter(f => f.severity === 'Critical').length, tone: 'critical' },
+                { id: 'High', label: 'High', count: findings.filter(f => f.severity === 'High').length, tone: 'high' },
+                { id: 'Medium', label: 'Medium', count: findings.filter(f => f.severity === 'Medium').length, tone: 'medium' },
+                { id: 'Low', label: 'Low', count: findings.filter(f => f.severity === 'Low').length, tone: 'low' },
+                { id: 'Info', label: 'Info', count: findings.filter(f => f.severity === 'Info').length, tone: 'info' },
+              ]}
+              value={sevFilter}
+              onChange={setSevFilter}
+            />
+          </div>
+        )}
+
         {importMsg && (
           <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--success-bg)', fontSize: 11, color: 'var(--success)', lineHeight: 1.6 }}>
             {importMsg}
@@ -396,7 +413,7 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 {displayed.map((f) => (
                   <tr
                     key={f.id}
-                    className={selected?.id === f.id ? 'selected' : undefined}
+                    className={`${selected?.id === f.id ? 'selected' : ''} finding-row-${f.severity.toLowerCase()}`}
                     onClick={() => { setSelected(f); setTriageStatus(f.status); setTriageNote(''); setTriageError(''); setTriageEffect(''); setReviewDate(''); }}
                   >
                     <td style={{ whiteSpace: 'nowrap' }}>
@@ -480,11 +497,15 @@ export function FindingsWorkbench({ scanId, targetId }: Props) {
                 <h3 className="h3" style={{ fontSize: 15 }}>{selected.title}</h3>
                 <div className="mono small" style={{ marginTop: 'var(--s-1)', color: 'var(--text-secondary)' }}>{selected.affectedComponent}</div>
               </div>
-              <div className="stat" style={{ textAlign: 'right', flexShrink: 0, borderLeftColor: priorityColor(selected.priorityScore) }}>
-                <span className="stat-label">Priority</span>
-                <span className="stat-value" style={{ color: priorityColor(selected.priorityScore) }}>
-                  {selected.priorityScore.toFixed(1)}
-                </span>
+              <div style={{ flexShrink: 0 }}>
+                <RingChart
+                  value={(selected.priorityScore / 10) * 100}
+                  size={64}
+                  strokeWidth={6}
+                  color={priorityColor(selected.priorityScore)}
+                  label={selected.priorityScore.toFixed(1)}
+                  sub="Priority"
+                />
               </div>
             </div>
 

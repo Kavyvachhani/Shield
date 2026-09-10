@@ -64,12 +64,10 @@ function Shell() {
   const [authRecord, setAuthRecord] = useState<AuthorizationRecord | null>(null);
   const [scanRunId, setScanRunId] = useState<string | null>(null);
   const [profile, setProfile] = useState<ScanProfile | null>(null);
-  // Where to return after the profiles screen, when it was opened to pick a
-  // profile for a scan rather than browsed from the sidebar. Without this the
-  // "Choose a profile" button on the console was a one-way trip: selecting a
-  // profile set the state but left you on the profiles screen with no way back.
   const [profilesReturnTo, setProfilesReturnTo] = useState<Screen | null>(null);
   const [theme, toggleTheme] = useTheme();
+  const [isScanning, setIsScanning] = useState(false);
+  const [findingsCount, setFindingsCount] = useState<number | null>(null);
 
   // Read from the bundle rather than hardcoded. A literal here went stale
   // across two releases and reported v0.2.0 on every build, which made "which
@@ -116,27 +114,39 @@ function Shell() {
       <header
         className="row"
         style={{
-          height: 52,
+          height: 54,
           padding: '0 var(--s-5)',
           gap: 'var(--s-4)',
           background: 'var(--bg-surface)',
           borderBottom: '1px solid var(--border)',
+          boxShadow: 'var(--shadow-sm)',
           flexShrink: 0,
+          position: 'relative',
+          zIndex: 10,
         }}
       >
-        <div className="row">
-          <img
-            src={brandMark}
-            alt=""
-            width={28}
-            height={28}
-            style={{ borderRadius: 7, display: 'block', objectFit: 'cover' }}
-          />
-          <div className="col" style={{ gap: 0 }}>
-            <span style={{ fontSize: 13, fontWeight: 750, letterSpacing: '-0.01em' }}>
-              SentinelVAPT
+        <div className="row" style={{ gap: 'var(--s-3)' }}>
+          <div
+            style={{
+              padding: 2,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, var(--accent) 0%, transparent 80%)',
+              display: 'inline-flex',
+            }}
+          >
+            <img
+              src={brandMark}
+              alt=""
+              width={30}
+              height={30}
+              style={{ borderRadius: 6, display: 'block', objectFit: 'cover' }}
+            />
+          </div>
+          <div className="col" style={{ gap: 1 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 780, letterSpacing: '-0.02em' }}>
+              Sentinel<span style={{ color: 'var(--accent)' }}>VAPT</span>
             </span>
-            <span className="dim mono" style={{ fontSize: 9.5 }}>v{version}</span>
+            <span className="dim mono" style={{ fontSize: 9.5, opacity: 0.8 }}>v{version}</span>
           </div>
         </div>
 
@@ -148,24 +158,58 @@ function Shell() {
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-full)',
-              gap: 6,
+              gap: 7,
             }}
           >
-            <span className="dim small">{project.companyName}</span>
+            <span className="dim small" style={{ fontWeight: 550 }}>{project.companyName}</span>
             {target && (
               <>
                 <ChevronRight size={11} className="dim" />
-                <span className="small" style={{ fontWeight: 600 }}>{target.name}</span>
+                <span className="small" style={{ fontWeight: 650 }}>{target.name}</span>
               </>
             )}
-            {authRecord && (
+            {authRecord ? (
               <>
                 <ChevronRight size={11} className="dim" />
-                <span className="badge badge-low">
-                  <ShieldCheck size={10} /> Authorised
+                <span className="badge badge-low" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <ShieldCheck size={11} /> Authorised
+                </span>
+              </>
+            ) : (
+              <>
+                <ChevronRight size={11} className="dim" />
+                <span className="badge badge-high" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  Unauthorised
                 </span>
               </>
             )}
+          </div>
+        )}
+
+        {isScanning && (
+          <div
+            className="row pulse"
+            style={{
+              padding: '3px 10px',
+              background: 'var(--accent-soft)',
+              border: '1px solid var(--accent-border)',
+              borderRadius: 'var(--radius-full)',
+              gap: 6,
+              fontSize: 11.5,
+              fontWeight: 650,
+              color: 'var(--accent)',
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: 'var(--accent)',
+                boxShadow: '0 0 8px var(--accent)',
+              }}
+            />
+            Scan running…
           </div>
         )}
 
@@ -173,11 +217,11 @@ function Shell() {
 
         {profile && (
           <span className="badge badge-outline" title={profile.description}>
-            <Sparkles size={10} /> {profile.name}
+            <Sparkles size={11} style={{ color: 'var(--accent)' }} /> {profile.name}
           </span>
         )}
         <span className="badge badge-outline" title="No telemetry, no account, no cloud dependency">
-          <WifiOff size={10} /> Local only
+          <WifiOff size={11} /> Local only
         </span>
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </header>
@@ -185,19 +229,20 @@ function Shell() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <nav
           style={{
-            width: 196,
+            width: 204,
             flexShrink: 0,
-            padding: 'var(--s-2)',
+            padding: 'var(--s-3) var(--s-2)',
             background: 'var(--bg-surface)',
             borderRight: '1px solid var(--border)',
             overflowY: 'auto',
           }}
         >
           {sections.map(({ key, title }) => (
-            <div key={key}>
+            <div key={key} style={{ marginBottom: 'var(--s-2)' }}>
               <div className="nav-section">{title}</div>
               {NAV.filter((n) => n.section === key).map(({ id, label, icon: Icon }) => {
                 const blocked = blockedBecause(id);
+                const count = id === 'findings' && findingsCount !== null ? findingsCount : undefined;
                 return (
                   <button
                     key={id}
@@ -206,8 +251,11 @@ function Shell() {
                     title={blocked ?? label}
                     onClick={() => { if (!blocked) { if (id !== 'profiles') setProfilesReturnTo(null); setScreen(id); } }}
                   >
-                    <Icon size={15} />
-                    {label}
+                    <Icon size={16} />
+                    <span className="grow truncate">{label}</span>
+                    {count !== undefined && count > 0 && (
+                      <span className="nav-count">{count}</span>
+                    )}
                   </button>
                 );
               })}
@@ -274,8 +322,11 @@ function Shell() {
               authRecord={authRecord}
               profile={profile}
               onChooseProfile={() => { setProfilesReturnTo('console'); setScreen('profiles'); }}
-              onScanComplete={(id) => {
+              onScanStateChange={setIsScanning}
+              onScanComplete={(id, count) => {
                 setScanRunId(id);
+                if (count !== undefined) setFindingsCount(count);
+                setIsScanning(false);
                 setScreen('findings');
               }}
             />

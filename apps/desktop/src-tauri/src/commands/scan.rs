@@ -819,16 +819,26 @@ async fn process_stage_result(
 /// configured, RoE gate declined it) rather than "this broke".
 ///
 /// Semgrep, Trivy and Gitleaks report a missing `repo_ref` as "requires a
-/// repository path" — not "no source repository", which is the string this
-/// function used to look for and which none of them ever emit. Every
-/// URL-only target (the app's advertised no-setup path) therefore showed
-/// three red FAILED cards for entirely expected behaviour: those stages have
-/// nothing to scan without a cloned repository.
+/// repository path". The OSV-Scanner, TruffleHog, retire.js and Checkov
+/// adapters use the `repo_path()` helper in external_tools.rs, which emits
+/// "analyses source, so it needs a repository path". Both wordings mean the
+/// same thing to the analyst — nothing wrong with the tool, just nothing to
+/// scan — so both must be treated as a skip, not a failure.
+///
+/// A `repo_ref` that was configured but points to a path that does not exist
+/// is NOT classified as a skip: that is a real misconfiguration the analyst
+/// needs to see and fix.
 fn is_skip_message(msg: &str) -> bool {
     msg.contains("not found on PATH")
         || msg.contains("not found or unreachable")
         || msg.contains("AUTH GATE BLOCKED")
+        // Semgrep / Trivy / Gitleaks wording (from their own adapters)
         || msg.contains("requires a repository path")
+        // OSV-Scanner / TruffleHog / retire.js / Checkov wording (from repo_path() helper)
+        || msg.contains("needs a repository path")
+        || msg.contains("analyses source, so it needs a repository path")
+        // Recon: no domain to resolve from the base URL — valid skip
+        || msg.contains("no domain to enumerate")
 }
 
 /// Engine name as used by the checklist coverage catalog.
@@ -860,10 +870,11 @@ fn engine_name(stage: &str) -> &'static str {
 /// out to a binary the analyst had to install.
 ///
 /// Only affects what the console says, but saying "invoking user-installed
-/// Sentinel Code binary" would send somebody looking for a binary that does not
-/// exist when a stage reports nothing.
+/// recon binary" would send somebody looking for a binary that does not
+/// exist when a stage reports nothing. Both `recon` and `native` are built-in
+/// Rust adapters that ship inside the application.
 fn is_builtin(stage: &str) -> bool {
-    matches!(stage, "code" | "dependencies" | "secrets" | "infrastructure" | "native")
+    matches!(stage, "code" | "dependencies" | "secrets" | "infrastructure" | "recon" | "native")
 }
 
 /// Human-readable stage label for the scan console.
@@ -1199,18 +1210,27 @@ mod tests {
 
     /// A URL-only target — the app's advertised no-setup scanning path — has no
     /// `repo_ref`, so Semgrep, Trivy and Gitleaks all decline with "requires a
-    /// repository path". That is expected behaviour, not a bug, and must show
-    /// as a skipped stage rather than a red failure. `is_skip_message` used to
-    /// look for "no source repository", a string none of the three adapters
-    /// ever emit, so every URL-only scan showed three FAILED cards.
+    /// repository path", and OSV-Scanner/TruffleHog/retire.js/Checkov decline
+    /// with "analyses source, so it needs a repository path". Both are expected
+    /// behaviour and must show as a skipped stage rather than a red failure.
     #[test]
     fn missing_repo_ref_is_classified_as_skipped_not_failed() {
+        // Semgrep / Trivy / Gitleaks wording
         for msg in [
             "Semgrep SAST requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
             "Trivy SCA requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
             "Gitleaks requires a repository path. Set 'repo_ref' on the target (e.g. /home/user/repos/acme-portal).",
         ] {
             assert!(is_skip_message(msg), "'{msg}' must be classified as a skip, not a failure");
+        }
+        // OSV-Scanner / TruffleHog / retire.js / Checkov wording (repo_path() helper)
+        for msg in [
+            "OSV-Scanner analyses source, so it needs a repository path. Set the target's 'repo_ref' to a local checkout.",
+            "TruffleHog analyses source, so it needs a repository path. Set the target's 'repo_ref' to a local checkout.",
+            "retire.js analyses source, so it needs a repository path. Set the target's 'repo_ref' to a local checkout.",
+            "Checkov analyses source, so it needs a repository path. Set the target's 'repo_ref' to a local checkout.",
+        ] {
+            assert!(is_skip_message(msg), "'{msg}' (external tool) must be classified as a skip, not a failure");
         }
     }
 

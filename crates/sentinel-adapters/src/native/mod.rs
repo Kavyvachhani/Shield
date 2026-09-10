@@ -25,6 +25,7 @@
 
 pub mod active;
 pub mod aggregate;
+pub mod auth_audit;
 pub mod builder;
 pub mod content;
 pub mod crawl;
@@ -60,6 +61,7 @@ pub fn all_specs() -> Vec<&'static builder::CheckSpec> {
         .chain(disclosure::SPECS)
         .chain(exposure::SPECS)
         .chain(active::SPECS)
+        .chain(auth_audit::SPECS)
         .collect()
 }
 
@@ -210,7 +212,15 @@ impl ScannerAdapter for NativeCheckAdapter {
         // that cannot tell them apart is asking for trust it has not earned.
         findings.push(surface::record(target_id, scan_id, &base_url, &crawl));
 
-        // ── 8. Score every finding before handing them back ──────────────────
+        // ── 8. Authentication and authorization audit ────────────────────────
+        // Runs after the crawl so auth_audit::run receives the full discovered
+        // endpoint list. These checks use the probe's own rate limit, so they
+        // sit alongside the active checks that also touch the network.
+        findings.extend(
+            auth_audit::run(&probe, target_id, scan_id, &base_url, &discovered).await,
+        );
+
+        // ── 9. Score every finding before handing them back ──────────────────
         for finding in &mut findings {
             sentinel_core::scoring::priority::PriorityScoringEngine::score_and_explain(finding);
         }
