@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Play, Square, CheckCircle2, XCircle, SkipForward, Clock, Loader2, ShieldOff, Shield, SlidersHorizontal, Sparkles, KeyRound, Trash2, FolderGit2 } from 'lucide-react';
 import type {
   Target, AuthorizationRecord, ScanLogPayload, ScanProfile, ScanStage, StageState,
-  EngineDescriptor,
+  EngineDescriptor, CredentialStatus,
 } from '../types';
 import { api, events } from '../lib/tauri';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -167,6 +167,17 @@ export function ScanConsoleScreen({
 }: Props) {
   const [stages, setStages] = useState<StageStatus[]>([]);
   const [enginesError, setEnginesError] = useState('');
+  // Whether a credential is sitting in the OS keychain for this target.
+  const [credStatus, setCredStatus] = useState<CredentialStatus | null>(null);
+  const [credBusy, setCredBusy] = useState(false);
+  const [credError, setCredError] = useState('');
+  // The source checkout the static engines read. Editable here because a wrong
+  // path was previously only fixable by recreating the target, which discards
+  // its findings and its signed authorisation along with the mistake.
+  const [repoRef, setRepoRef] = useState(target.repoRef ?? '');
+  const [repoSaved, setRepoSaved] = useState(target.repoRef ?? '');
+  const [repoBusy, setRepoBusy] = useState(false);
+  const [repoError, setRepoError] = useState('');
   // A card for an engine the profile has switched off would sit on "Waiting…"
   // for the whole run, which reads as a stalled stage rather than an excluded
   // one. With no profile chosen everything runs, so everything is shown.
@@ -240,6 +251,44 @@ export function ScanConsoleScreen({
   // and blamed the silence on a stray second instance twenty seconds later.
   // A subscription that cannot be established is a hard failure and now says
   // so immediately, before any scan is launched.
+  // A credential for this target lives in the OS keychain, not in the
+  // engagement file. It could be written from the setup wizard and then never
+  // seen again: nothing in the interface said whether one was stored, and
+  // nothing could remove it. That is the wrong shape for a secret — an analyst
+  // finishing an engagement had no way to revoke what they had left behind
+  // except to go into Credential Manager and find it by hand.
+  useEffect(() => {
+    let active = true;
+    api.getTargetCredentialStatus(target.id)
+      .then((st) => { if (active) setCredStatus(st); })
+      .catch((err) => { if (active) setCredError(String(err)); });
+    return () => { active = false; };
+  }, [target.id]);
+
+  async function saveRepo() {
+    setRepoBusy(true);
+    setRepoError('');
+    try {
+      const updated = await api.updateTargetRepo(target.id, repoRef.trim());
+      setRepoSaved(updated.repoRef ?? '');
+      setRepoRef(updated.repoRef ?? '');
+    } catch (err) {
+      setRepoError(String(err));
+    }
+    setRepoBusy(false);
+  }
+
+  async function clearCredentials() {
+    setCredBusy(true);
+    setCredError('');
+    try {
+      setCredStatus(await api.clearTargetCredentials(target.id));
+    } catch (err) {
+      setCredError(String(err));
+    }
+    setCredBusy(false);
+  }
+
   // Load the engine list once. A failure here is worth surfacing rather than
   // rendering an empty grid: no cards beside a working Launch button looks like
   // a scan with nothing to run, which is indistinguishable from a scan that ran
@@ -495,6 +544,64 @@ export function ScanConsoleScreen({
         <button className="btn btn-sm" onClick={onChooseProfile} disabled={isRunning}>
           {profile ? 'Change profile' : 'Choose a profile'}
         </button>
+      </div>
+
+      {/* Source checkout. The static engines read this directory; with it unset
+          they skip cleanly and the scan reports only what the live engines saw,
+          which is easy to mistake for a clean result. */}
+      <div className="card card-tight">
+        <div className="between wrap" style={{ gap: 'var(--s-2)', marginBottom: 'var(--s-2)' }}>
+          <div className="row">
+            <FolderGit2 size={14} style={{ color: repoSaved ? 'var(--success)' : 'var(--warning)' }} />
+            <strong>{repoSaved ? 'Source repository' : 'No source repository set'}</strong>
+          </div>
+          {repoRef.trim() !== repoSaved && (
+            <button className="btn btn-sm btn-primary" onClick={saveRepo} disabled={repoBusy || isRunning}>
+              {repoBusy ? <Loader2 size={13} className="spin" /> : null}
+              {repoBusy ? 'Saving…' : 'Save path'}
+            </button>
+          )}
+        </div>
+        <input
+          className="input input-mono"
+          value={repoRef}
+          onChange={(e) => { setRepoRef(e.target.value); setRepoError(''); }}
+          placeholder="/path/to/the/checkout"
+          aria-label="Source repository path"
+          disabled={isRunning}
+        />
+        <span className="hint">
+          {repoError
+            ? repoError
+            : repoSaved
+              ? 'The code, dependency, secret and infrastructure engines read this directory. Change it and save to point the next scan at a different checkout.'
+              : 'Without a checkout the source engines skip, and the scan reports only what the live engines saw — which reads the same as a clean result. Set it before relying on this assessment.'}
+        </span>
+      </div>
+
+      {/* Scan credentials. Shown here because "will this scan reach the pages
+          behind the login" is decided at launch, not at setup. */}
+      <div className="card card-tight between wrap">
+        <div className="col" style={{ gap: 2 }}>
+          <div className="row">
+            <KeyRound size={14} style={{ color: credStatus?.configured ? 'var(--success)' : 'var(--text-muted)' }} />
+            <strong>{credStatus?.configured ? 'Credential stored' : 'No credential stored'}</strong>
+            {credStatus?.configured && <span className="badge badge-outline">OS keychain</span>}
+          </div>
+          <span className="hint">
+            {credError
+              ? credError
+              : credStatus?.configured
+                ? `${credStatus.description ?? 'A credential is held for this target'} — the engine will assess the authenticated pages. It is never written to the engagement file or a report.`
+                : 'The scan will only reach pages a signed-out visitor can see. Add a credential in Project & target to assess what sits behind the login.'}
+          </span>
+        </div>
+        {credStatus?.configured && (
+          <button className="btn btn-sm" onClick={clearCredentials} disabled={credBusy || isRunning}>
+            {credBusy ? <Loader2 size={13} className="spin" /> : <Trash2 size={13} />}
+            {credBusy ? 'Removing…' : 'Remove from keychain'}
+          </button>
+        )}
       </div>
 
       {/* Header row */}

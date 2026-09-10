@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download, Eye, Loader2, FileText, ImagePlus, Printer, X } from 'lucide-react';
-import type { GenerateReportInput, GenerateReportOutput, Project, ReportType } from '../types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Download, Eye, Loader2, FileText, ImagePlus, Printer, X, History } from 'lucide-react';
+import type { GenerateReportInput, GenerateReportOutput, Project, ReportType, ReportRecord } from '../types';
 import { api } from '../lib/tauri';
 
 /**
@@ -73,6 +73,13 @@ const REPORT_OPTIONS: ReportOption[] = [
   },
 ];
 
+/** The stored report_type as the interface names it. */
+const REPORT_LABEL: Record<string, string> = {
+  client: 'Client report',
+  developer: 'Developer report',
+  full: 'Full data export',
+};
+
 export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: Props) {
   const [reportType, setReportType] = useState<ReportType>('client');
   const [companyName, setCompanyName] = useState(project.companyName);
@@ -93,6 +100,13 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
   const [error, setError] = useState('');
   const [logo, setLogo] = useState<string | undefined>(project.logoDataUri);
   const [logoBusy, setLogoBusy] = useState(false);
+  // Reports already generated for this scan. The backend has kept them all
+  // along; nothing in the interface ever listed them, so a report generated an
+  // hour ago could only be reached by generating it again — and a second
+  // generation of the same scan is a second document with a new id, which is
+  // exactly what a revision-controlled deliverable must not have happen by
+  // accident.
+  const [history, setHistory] = useState<ReportRecord[]>([]);
   const logoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -180,12 +194,24 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
         revision: revision.trim() || undefined,
       };
       setReport(await api.generateReport(input));
+      void refreshHistory();
     } catch (err) {
       setError(String(err));
     } finally {
       setGenerating(false);
     }
   }
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHistory(await api.listReports(scanId));
+    } catch {
+      // A history that cannot be listed is not worth interrupting the screen
+      // for; generating and exporting both still work without it.
+    }
+  }, [scanId]);
+
+  useEffect(() => { void refreshHistory(); }, [refreshHistory]);
 
   async function saveToDisk() {
     if (!report) return;
@@ -471,6 +497,39 @@ export function ReportBuilderScreen({ project, scanId, targetName, targetUrl }: 
                 </div>
               </>
             )}
+          </Section>
+        )}
+
+        {history.length > 0 && (
+          <Section title={`Generated for this scan (${history.length})`}>
+            <div className="col" style={{ gap: 'var(--s-2)' }}>
+              {history.map((r) => (
+                <div key={r.id} className="card card-tight between wrap" style={{ gap: 'var(--s-2)' }}>
+                  <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                    <div className="row">
+                      <History size={13} style={{ color: 'var(--text-muted)' }} />
+                      <strong className="truncate">{REPORT_LABEL[r.reportType] ?? r.reportType}</strong>
+                      {report?.reportId === r.id && <span className="badge badge-accent">Current</span>}
+                    </div>
+                    <span className="hint">
+                      {r.companyName} · {new Date(r.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => { void api.printReport(r.id).catch((e) => setError(String(e))); }}
+                    title="Open this report in its own window and raise the print dialog"
+                  >
+                    <Printer size={13} /> Open
+                  </button>
+                </div>
+              ))}
+            </div>
+            <span className="hint" style={{ marginTop: 'var(--s-2)', display: 'block' }}>
+              Every report generated for this scan is kept, so a document handed to a client
+              can be reopened exactly as it was rather than regenerated into a new one with a
+              different id.
+            </span>
           </Section>
         )}
 
