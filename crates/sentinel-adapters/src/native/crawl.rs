@@ -27,7 +27,7 @@
 //! has an unbounded URL space, and a scanner that walks into one never
 //! finishes.
 
-use super::endpoints::{self, Endpoint};
+use super::endpoints::{self, Endpoint, Origin};
 use super::probe::{is_readable, Probe, ProbeResponse};
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -238,7 +238,56 @@ async fn declared_endpoints(probe: &Probe, origin: &Url) -> Vec<Endpoint> {
         }
     }
 
+    // Common high-value application & API routes discovery
+    found.extend(probe_common_routes(probe, origin).await);
+
     endpoints::same_origin(found, &base)
+}
+
+const COMMON_ROUTE_WORDLIST: &[&str] = &[
+    "/api", "/api/v1", "/api/v2", "/v1", "/v2",
+    "/api/users", "/api/user", "/api/me", "/api/auth", "/api/login",
+    "/api/v1/auth/login", "/api/v1/users", "/api/v1/me",
+    "/api/v2/auth/login", "/api/v2/users", "/api/v2/me",
+    "/login", "/signin", "/auth/login", "/auth", "/oauth/token", "/api/token",
+    "/signup", "/register", "/logout",
+    "/graphql", "/graphiql", "/api/graphql", "/query",
+    "/admin", "/admin/login", "/dashboard", "/console", "/panel",
+    "/health", "/healthz", "/live", "/ready", "/status", "/version", "/ping", "/metrics", "/info",
+    "/actuator", "/actuator/health", "/actuator/env", "/actuator/info",
+    "/swagger", "/swagger-ui.html", "/swagger/v1/swagger.json", "/openapi.json", "/api-docs", "/v3/api-docs",
+    "/account", "/settings", "/profile", "/upload", "/files", "/docs",
+    "/.well-known/security.txt",
+];
+
+async fn probe_common_routes(probe: &Probe, origin: &Url) -> Vec<Endpoint> {
+    let base = origin.clone();
+    let root = origin.as_str().trim_end_matches('/').to_string();
+    let mut found: Vec<Endpoint> = Vec::new();
+
+    // Test a non-existent canary path to detect catch-all wildcard 200 responses
+    let canary = format!("{root}/sentinel_nonexistent_route_404_probe");
+    if let Ok(Some(resp)) = probe.get(&canary).await {
+        if resp.status == 200 {
+            // Origin returns 200 for arbitrary non-existent paths (catch-all SPA).
+            // Skip wordlist probing to prevent phantom endpoint explosions.
+            return found;
+        }
+    }
+
+    for path in COMMON_ROUTE_WORDLIST {
+        let Ok(Some(resp)) = probe.get(&format!("{root}{path}")).await else { continue };
+        if (200..400).contains(&resp.status) || resp.status == 401 || resp.status == 403 {
+            if let Ok(url) = base.join(path) {
+                found.push(Endpoint {
+                    url: url.to_string(),
+                    origin: Origin::RouteWordlist,
+                });
+            }
+        }
+    }
+
+    found
 }
 
 /// Endpoints referenced from a script the crawl fetched.

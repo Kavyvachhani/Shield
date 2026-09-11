@@ -35,6 +35,10 @@ pub enum Origin {
     RobotsDirective,
     /// A path referenced from client-side JavaScript.
     ClientScript,
+    /// Discovered via active route enumeration.
+    RouteWordlist,
+    /// Ingested from a Postman collection or traffic capture.
+    TrafficCapture,
 }
 
 impl Origin {
@@ -44,8 +48,33 @@ impl Origin {
             Origin::Sitemap => "listed in sitemap.xml",
             Origin::RobotsDirective => "named in a robots.txt directive",
             Origin::ClientScript => "referenced from client-side JavaScript",
+            Origin::RouteWordlist => "discovered via active route enumeration",
+            Origin::TrafficCapture => "imported from traffic capture or collection",
         }
     }
+}
+
+/// Normalize a parameterized route into a canonical path template.
+/// E.g. `/api/v1/users/123/orders/456` -> `/api/v1/users/{id}/orders/{id}`
+pub fn normalize_path(path: &str) -> String {
+    let mut normalized_segments = Vec::new();
+    for seg in path.split('/') {
+        if seg.is_empty() {
+            continue;
+        }
+        if seg.parse::<u64>().is_ok() {
+            normalized_segments.push("{id}".to_string());
+        } else if uuid::Uuid::parse_str(seg).is_ok() {
+            normalized_segments.push("{uuid}".to_string());
+        } else if (seg.len() == 32 || seg.len() == 40 || seg.len() == 64)
+            && seg.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            normalized_segments.push("{hash}".to_string());
+        } else {
+            normalized_segments.push(seg.to_string());
+        }
+    }
+    format!("/{}", normalized_segments.join("/"))
 }
 
 /// One discovered endpoint and where it was found.
@@ -269,6 +298,55 @@ pub fn same_origin(endpoints: Vec<Endpoint>, base: &Url) -> Vec<Endpoint> {
         }
     }
     out
+}
+
+/// Extract endpoints from a Postman Collection JSON document (v2 / v2.1).
+pub fn from_postman(json: &str, base: &Url) -> Vec<Endpoint> {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut stack = vec![doc];
+
+    while let Some(node) = stack.pop() {
+        if let Some(items) = node.get("item").and_then(|i| i.as_array()) {
+            for item in items {
+                stack.push(item.clone());
+            }
+        }
+
+        if let Some(request) = node.get("request") {
+            let raw_url = if let Some(url_str) = request.get("url").and_then(|u| u.as_str()) {
+                Some(url_str.to_string())
+            } else if let Some(url_obj) = request.get("url").and_then(|u| u.as_object()) {
+                if let Some(raw) = url_obj.get("raw").and_then(|r| r.as_str()) {
+                    Some(raw.to_string())
+                } else if let Some(path_arr) = url_obj.get("path").and_then(|p| p.as_array()) {
+                    let segments: Vec<&str> = path_arr.iter().filter_map(|s| s.as_str()).collect();
+                    Some(format!("/{}", segments.join("/")))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(url_candidate) = raw_url {
+                if let Ok(resolved) = base.join(&url_candidate) {
+                    out.push(Endpoint {
+                        url: resolved.to_string(),
+                        origin: Origin::TrafficCapture,
+                    });
+                }
+            }
+        }
+        if out.len() >= 300 {
+            break;
+        }
+    }
+
+    same_origin(out, base)
 }
 
 #[cfg(test)]

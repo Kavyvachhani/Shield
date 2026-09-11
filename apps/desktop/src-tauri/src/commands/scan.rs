@@ -347,7 +347,7 @@ pub async fn trigger_scan(
         let static_results = futures_util::future::join_all(
             static_stages
                 .iter()
-                .map(|stage| run_stage_bounded(stage, &core_target, &config_json)),
+                .map(|stage| run_stage_bounded(&app, &run_id_clone, stage, &core_target, &config_json)),
         )
         .await;
 
@@ -368,7 +368,7 @@ pub async fn trigger_scan(
             // from a slow one. An external scanner blocked on input, or a host
             // that accepts a connection and then goes silent, both do this.
             // Bound every stage so the run always finishes and always reports.
-            let stage_result = run_stage_bounded(stage_name, &core_target, &config_json).await;
+            let stage_result = run_stage_bounded(&app, &run_id_clone, stage_name, &core_target, &config_json).await;
 
             process_stage_result(
                 &app, &store_clone, &findings_clone, &run_id_clone,
@@ -600,6 +600,8 @@ fn build_core_target(
 }
 
 async fn run_stage_for(
+    app: &tauri::AppHandle,
+    run_id: &str,
     stage: &str,
     target: &sentinel_core::models::target::Target,
     config_json: &str,
@@ -617,7 +619,23 @@ async fn run_stage_for(
         // data source, and none to the target.
         "recon"          => sentinel_adapters::recon::ReconAdapter.run(target, config_json).await,
         "semgrep"     => sentinel_adapters::semgrep::SemgrepAdapter.run(target, config_json).await,
-        "native"      => AuthGatedDastRunner::new(sentinel_adapters::native::NativeCheckAdapter).run(target, config_json).await,
+        "native"      => {
+            use tauri::Emitter;
+            let app_handle = app.clone();
+            let rid = run_id.to_string();
+            let reporter = std::sync::Arc::new(move |msg: &str| {
+                let _ = app_handle.emit(EVENT_LOG, ScanLogPayload {
+                    scan_run_id: rid.clone(),
+                    stage: "native".to_string(),
+                    level: "info".into(),
+                    message: msg.to_string(),
+                    timestamp: Utc::now(),
+                });
+            });
+            AuthGatedDastRunner::new(sentinel_adapters::native::NativeCheckAdapter::with_reporter(reporter))
+                .run(target, config_json)
+                .await
+        }
         "trivy"       => sentinel_adapters::trivy::TrivyAdapter.run(target, config_json).await,
         "gitleaks"    => sentinel_adapters::gitleaks::GitleaksAdapter.run(target, config_json).await,
         "osv"         => sentinel_adapters::external_tools::OsvScannerAdapter.run(target, config_json).await,
@@ -640,11 +658,13 @@ async fn run_stage_for(
 /// Run one stage, bounded by `STAGE_TIMEOUT` so a wedged scanner can never
 /// hang the rest of the pipeline.
 async fn run_stage_bounded(
+    app: &tauri::AppHandle,
+    run_id: &str,
     stage_name: &str,
     target: &sentinel_core::models::target::Target,
     config_json: &str,
 ) -> anyhow::Result<Vec<sentinel_core::models::finding::Finding>> {
-    match tokio::time::timeout(STAGE_TIMEOUT, run_stage_for(stage_name, target, config_json)).await {
+    match tokio::time::timeout(STAGE_TIMEOUT, run_stage_for(app, run_id, stage_name, target, config_json)).await {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
             "{} exceeded the {}-minute stage timeout and was abandoned; \

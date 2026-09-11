@@ -118,7 +118,7 @@ Two pairs are deliberately run together rather than one instead of the other:
 
 | Engine | Type | Ships with the app? | Install |
 |---|---|---|---|
-| **Sentinel Native** | 80 checks: headers, TLS, cookies, cross-origin isolation, CORS, exposure, content, auth/authz audit, information disclosure | ✅ Built in | — |
+| **Sentinel Native** | 87 checks: headers, TLS, cookies, cross-origin isolation, CORS, exposure, content, auth/authz audit, information disclosure, file traversal, XSS, open redirect, CRLF, multi-user BOLA | ✅ Built in | — |
 | **Semgrep** | SAST — source code | No | `pip install semgrep` |
 | **Trivy** | SCA — dependency CVEs | No | `winget install AquaSecurity.Trivy` · `brew install trivy` |
 | **Gitleaks** | Secret detection | No | `winget install Gitleaks.Gitleaks` · `brew install gitleaks` |

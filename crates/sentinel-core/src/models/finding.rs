@@ -41,6 +41,20 @@ pub enum FindingStatus {
     FalsePositive,
 }
 
+/// Verification confidence level for the finding.
+///
+/// Distinguishes between heuristic indicators (Candidate),
+/// multi-factor verified conditions (Verified), and
+/// proven exploitability via replay / proof-of-concept (Confirmed).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationStatus {
+    #[default]
+    Candidate,
+    Verified,
+    Confirmed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CVSS4Data {
     /// Full CVSS 4.0 vector string (e.g. CVSS:4.0/AV:N/AC:L/...)

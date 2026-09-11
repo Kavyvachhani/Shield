@@ -215,7 +215,7 @@ pub const SPECS: &[CheckSpec] = &[
 /// live target inside the RoE's rate limit — so this is a budget, not a
 /// preference. Twelve covers an application's distinct route families without
 /// turning a scan into an afternoon.
-const ENDPOINT_SAMPLE: usize = 12;
+const ENDPOINT_SAMPLE: usize = 16;
 
 /// Run the active checks against the origin and a sample of its endpoints.
 ///

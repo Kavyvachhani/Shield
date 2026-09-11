@@ -30,6 +30,7 @@ const OWASP_ACCESS: &str = "A01:2025-Broken Access Control";
 const OWASP_MISCONFIG: &str = "A02:2025-Security Misconfiguration";
 const OWASP_CRYPTO: &str = "A04:2025-Cryptographic Failures";
 const OWASP_INTEGRITY: &str = "A08:2025-Software or Data Integrity Failures";
+const OWASP_INJECTION: &str = "A03:2025-Injection";
 
 // ── Check Specifications ──────────────────────────────────────────────────────
 
@@ -327,6 +328,122 @@ query parameters from log outputs.",
     ],
 };
 
+const PATH_TRAVERSAL: CheckSpec = CheckSpec {
+    id: "NATIVE-PATH-TRAVERSAL-LEAK",
+    title: "Path Traversal Arbitrary File Read via Parameter Manipulation",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-22",
+    wstg: "WSTG-INPV-11",
+    owasp_2025: OWASP_ACCESS,
+    api_top10: Some("API1:2023-Broken Object Level Authorization"),
+    description: "An endpoint accepts file path or template parameters (e.g. `file=`, `path=`, `doc=`, `view=`) \
+which allow dot-dot-slash sequence traversal (`../../../../etc/passwd` or `..\\..\\win.ini`). The server \
+returned file contents indicating unauthorized read access to server filesystem resources.",
+    remediation: "Never pass unsanitized user input directly to filesystem APIs. Use an allow-list of known IDs \
+or filenames mapped to internal resources. If dynamic file paths are necessary, normalize paths with canonicalization \
+and verify the absolute path remains strictly within the intended base directory.",
+    references: &[
+        "https://owasp.org/www-community/attacks/Path_Traversal",
+        "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html",
+    ],
+};
+
+const REFLECTED_XSS: CheckSpec = CheckSpec {
+    id: "NATIVE-REFLECTED-XSS-PARAM",
+    title: "Reflected Cross-Site Scripting (XSS) via Unencoded Input Echo",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-79",
+    wstg: "WSTG-INPV-01",
+    owasp_2025: OWASP_INJECTION,
+    api_top10: None,
+    description: "The application reflects untrusted input directly into the HTML response body or attributes \
+without contextual output encoding. An attacker can construct a crafted URL that executes arbitrary JavaScript \
+within the victim's browser session, allowing session hijacking, credential theft, or sensitive action execution.",
+    remediation: "Apply context-aware contextual output encoding (HTML body, HTML attribute, JavaScript variable) \
+before reflecting user input. Implement a robust Content Security Policy (CSP) with `script-src 'self'` and nonces \
+to prevent script execution even if injection occurs.",
+    references: &[
+        "https://owasp.org/www-community/attacks/xss/",
+        "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html",
+    ],
+};
+
+const OPEN_REDIRECT: CheckSpec = CheckSpec {
+    id: "NATIVE-OPEN-REDIRECT-VALIDATION",
+    title: "Unvalidated Open Redirect via Parameter Manipulation",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-601",
+    wstg: "WSTG-CLNT-04",
+    owasp_2025: OWASP_ACCESS,
+    api_top10: None,
+    description: "The application accepts an untrusted destination URL in a query parameter (e.g. `return=`, `next=`, `redirect_uri=`) \
+and issues an HTTP 30x redirect to that arbitrary location without verification. Attackers exploit open redirects in phishing campaigns \
+to redirect victims from a legitimate trusted domain to a malicious credential-harvesting site.",
+    remediation: "Avoid accepting arbitrary redirect targets from user input. Where redirection is required, validate \
+the target URL against a strict allow-list of internal relative paths or approved domain origins.",
+    references: &[
+        "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html",
+        "https://cwe.mitre.org/data/definitions/601.html",
+    ],
+};
+
+const CRLF_INJECTION: CheckSpec = CheckSpec {
+    id: "NATIVE-CRLF-HEADER-INJECTION",
+    title: "CRLF Carriage Return / Line Feed HTTP Response Header Injection",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-113",
+    wstg: "WSTG-INPV-15",
+    owasp_2025: OWASP_INJECTION,
+    api_top10: None,
+    description: "The application incorporates user-supplied input into HTTP response headers without stripping CR (%0D) and LF (%0A) \
+characters. This allows an attacker to inject arbitrary HTTP headers (such as `Set-Cookie`) or split the HTTP response, facilitating \
+HTTP response splitting, cache poisoning, and cross-site scripting (XSS).",
+    remediation: "Sanitize all user input before using it in HTTP headers by stripping carriage returns (\\r, %0D) and line feeds (\\n, %0A). \
+Use modern web frameworks that automatically reject or encode header values containing newline characters.",
+    references: &[
+        "https://owasp.org/www-community/vulnerabilities/CRLF_Injection",
+        "https://cwe.mitre.org/data/definitions/113.html",
+    ],
+};
+
+const DEBUG_PARAM_EXPOSURE: CheckSpec = CheckSpec {
+    id: "NATIVE-DEBUG-PARAM-EXPOSURE",
+    title: "Hidden Debug or Administrative Parameter Bypass Exposed",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-489",
+    wstg: "WSTG-CONF-04",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: Some("API8:2023-Security Misconfiguration"),
+    description: "The application alters its execution mode, error reporting, or authentication requirements when passed hidden \
+debug parameters (e.g. `?debug=true`, `?test=1`, `?admin=1`, `?trace=true`). Debug parameters left enabled in production expose \
+internal diagnostics or allow bypass of business logic.",
+    remediation: "Remove all debugging, test, and staging code before deploying to production. Strip development parameters \
+at the reverse proxy or API gateway level and ensure debug flags cannot be enabled via client query strings or headers.",
+    references: &[
+        "https://cwe.mitre.org/data/definitions/489.html",
+        "https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+    ],
+};
+
+const BACKUP_SENSITIVE_FILES: CheckSpec = CheckSpec {
+    id: "NATIVE-BACKUP-SENSITIVE-FILES",
+    title: "Sensitive Backup, Archive, or Configuration Files Publicly Accessible",
+    cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+    cwe: "CWE-530",
+    wstg: "WSTG-CONF-04",
+    owasp_2025: OWASP_MISCONFIG,
+    api_top10: Some("API8:2023-Security Misconfiguration"),
+    description: "Temporary, backup, or archive files (such as `.bak`, `.old`, `.swp`, `backup.tar.gz`, `app.zip`, `.env.backup`) \
+are publicly accessible on the web server. These files often contain uncompiled source code, plaintext database credentials, \
+encryption keys, and private infrastructure configuration.",
+    remediation: "Configure the web server to deny access to backup, temporary, and hidden file extensions. Ensure deployment \
+pipelines clean up editor swap files and database dump archives, and store backups in dedicated private storage.",
+    references: &[
+        "https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+        "https://cwe.mitre.org/data/definitions/530.html",
+    ],
+};
+
 // ── Public spec list ──────────────────────────────────────────────────────────
 
 pub const SPECS: &[CheckSpec] = &[
@@ -343,6 +460,12 @@ pub const SPECS: &[CheckSpec] = &[
     CACHE_DECEPTION,
     DATABASE_ERROR_DISCLOSURE,
     API_KEY_IN_URL,
+    PATH_TRAVERSAL,
+    REFLECTED_XSS,
+    OPEN_REDIRECT,
+    CRLF_INJECTION,
+    DEBUG_PARAM_EXPOSURE,
+    BACKUP_SENSITIVE_FILES,
 ];
 
 // ── Runner ────────────────────────────────────────────────────────────────────
@@ -398,6 +521,24 @@ pub async fn run(
 
     // Sensitive credentials or API keys in URL query string
     findings.extend(check_api_key_in_url(probe, target_id, scan_id, discovered).await);
+
+    // Path traversal arbitrary file read
+    findings.extend(check_path_traversal(probe, target_id, scan_id, discovered).await);
+
+    // Reflected Cross-Site Scripting (XSS)
+    findings.extend(check_reflected_xss(probe, target_id, scan_id, discovered).await);
+
+    // Unvalidated open redirect
+    findings.extend(check_open_redirect(probe, target_id, scan_id, discovered).await);
+
+    // CRLF header injection
+    findings.extend(check_crlf_injection(probe, target_id, scan_id, discovered).await);
+
+    // Hidden debug / admin parameter exposure
+    findings.extend(check_debug_param_exposure(probe, target_id, scan_id, discovered).await);
+
+    // Exposed backup / sensitive archive files
+    findings.extend(check_backup_sensitive_files(probe, target_id, scan_id, origin).await);
 
     findings
 }
@@ -1383,6 +1524,411 @@ async fn check_api_key_in_url(
                         return findings;
                     }
                     break;
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── Path Traversal ────────────────────────────────────────────────────────────
+
+const TRAVERSAL_PARAM_NAMES: &[&str] = &[
+    "file", "path", "doc", "view", "page", "template", "include", "read", "load",
+];
+
+async fn check_path_traversal(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    discovered: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for url in discovered {
+        let Ok(parsed) = url::Url::parse(url) else { continue };
+        let mut matching_keys = Vec::new();
+        for (key, _) in parsed.query_pairs() {
+            let key_lower = key.to_lowercase();
+            if TRAVERSAL_PARAM_NAMES.iter().any(|&p| p == key_lower) {
+                matching_keys.push(key.to_string());
+            }
+        }
+
+        for key in matching_keys {
+            let mut test_url = parsed.clone();
+            let test_payload = "../../../../etc/passwd";
+            // Replace key's value with traversal payload
+            let new_pairs: Vec<(String, String)> = parsed
+                .query_pairs()
+                .map(|(k, v)| {
+                    if k == key {
+                        (k.to_string(), test_payload.to_string())
+                    } else {
+                        (k.to_string(), v.to_string())
+                    }
+                })
+                .collect();
+            test_url.query_pairs_mut().clear().extend_pairs(new_pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+
+            if let Ok(Some(resp)) = probe.get(test_url.as_str()).await {
+                if resp.status == 200
+                    && (resp.body.contains("root:x:0:0:") || resp.body.contains("root:*:0:0:") || resp.body.contains("daemon:x:"))
+                {
+                    findings.push(NativeFinding::build(
+                        &PATH_TRAVERSAL,
+                        target_id,
+                        scan_id,
+                        url,
+                        &format!(
+                            "Path traversal parameter `{key}` at `{}` returned server file content (/etc/passwd) \
+                             when supplied with traversal sequence `{test_payload}`.",
+                            parsed.path()
+                        ),
+                        vec![format!("curl -sSf '{}'", test_url.as_str())],
+                        vec![NativeFinding::evidence(
+                            "path_traversal_payload",
+                            "Path traversal arbitrary file read verified",
+                            &truncate(&resp.body, 200),
+                        )],
+                    ));
+                    if findings.len() >= 3 {
+                        return findings;
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── Reflected XSS ─────────────────────────────────────────────────────────────
+
+const XSS_PARAM_NAMES: &[&str] = &[
+    "q", "query", "search", "name", "keyword", "filter", "msg", "error", "redirect",
+];
+
+async fn check_reflected_xss(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    discovered: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for url in discovered {
+        let Ok(parsed) = url::Url::parse(url) else { continue };
+        let mut candidate_keys = Vec::new();
+        for (key, _) in parsed.query_pairs() {
+            let key_lower = key.to_lowercase();
+            if XSS_PARAM_NAMES.iter().any(|&p| p == key_lower) || key.len() <= 8 {
+                candidate_keys.push(key.to_string());
+            }
+        }
+
+        for key in candidate_keys {
+            let canary_id = Uuid::new_v4().simple().to_string();
+            let canary = format!("stxss{}", &canary_id[..6]);
+            let payload = format!("<stxss>{canary}</stxss>");
+
+            let mut test_url = parsed.clone();
+            let new_pairs: Vec<(String, String)> = parsed
+                .query_pairs()
+                .map(|(k, v)| {
+                    if k == key {
+                        (k.to_string(), payload.clone())
+                    } else {
+                        (k.to_string(), v.to_string())
+                    }
+                })
+                .collect();
+            test_url.query_pairs_mut().clear().extend_pairs(new_pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+
+            if let Ok(Some(resp)) = probe.get(test_url.as_str()).await {
+                let content_type = resp.header("content-type").unwrap_or_default().to_lowercase();
+                if content_type.contains("html") && resp.body.contains(&payload) {
+                    findings.push(NativeFinding::build(
+                        &REFLECTED_XSS,
+                        target_id,
+                        scan_id,
+                        url,
+                        &format!(
+                            "The parameter `{key}` at `{}` reflected unencoded HTML markup `{payload}` \
+                             in the HTTP response body without proper output escaping.",
+                            parsed.path()
+                        ),
+                        vec![format!("curl -sSf '{}'", test_url.as_str())],
+                        vec![NativeFinding::evidence(
+                            "reflected_xss_proof",
+                            "Reflected unescaped tag echo in HTML body",
+                            &format!("Echoed markup `{payload}` in response from {}", test_url.as_str()),
+                        )],
+                    ));
+                    if findings.len() >= 3 {
+                        return findings;
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── Open Redirect ─────────────────────────────────────────────────────────────
+
+const REDIRECT_PARAM_NAMES: &[&str] = &[
+    "redirect", "url", "return", "next", "dest", "target", "goto", "redirect_uri", "forward",
+];
+
+async fn check_open_redirect(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    discovered: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let test_target = "https://sentinel-security-verification-test.invalid";
+
+    for url in discovered {
+        let Ok(parsed) = url::Url::parse(url) else { continue };
+        let mut matching_keys = Vec::new();
+        for (key, _) in parsed.query_pairs() {
+            let key_lower = key.to_lowercase();
+            if REDIRECT_PARAM_NAMES.iter().any(|&p| p == key_lower) {
+                matching_keys.push(key.to_string());
+            }
+        }
+
+        for key in matching_keys {
+            let mut test_url = parsed.clone();
+            let new_pairs: Vec<(String, String)> = parsed
+                .query_pairs()
+                .map(|(k, v)| {
+                    if k == key {
+                        (k.to_string(), test_target.to_string())
+                    } else {
+                        (k.to_string(), v.to_string())
+                    }
+                })
+                .collect();
+            test_url.query_pairs_mut().clear().extend_pairs(new_pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+
+            if let Ok(Some(resp)) = probe.get(test_url.as_str()).await {
+                if (300..=308).contains(&resp.status) {
+                    if let Some(loc) = resp.header("location") {
+                        if loc.contains("sentinel-security-verification-test.invalid") {
+                            findings.push(NativeFinding::build(
+                                &OPEN_REDIRECT,
+                                target_id,
+                                scan_id,
+                                url,
+                                &format!(
+                                    "The endpoint `{}` redirected client to arbitrary untrusted external location `{loc}` \
+                                     specified via query parameter `{key}`.",
+                                    parsed.path()
+                                ),
+                                vec![format!("curl -sSI '{}'", test_url.as_str())],
+                                vec![NativeFinding::evidence(
+                                    "open_redirect_location",
+                                    "Open redirect 30x Location header observed",
+                                    &format!("Status {} with Location: {}", resp.status, loc),
+                                )],
+                            ));
+                            if findings.len() >= 3 {
+                                return findings;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── CRLF Injection ────────────────────────────────────────────────────────────
+
+async fn check_crlf_injection(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    discovered: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let crlf_payload = "%0d%0aX-Sentinel-Injected:%20crlf_detected";
+
+    for url in discovered {
+        let Ok(parsed) = url::Url::parse(url) else { continue };
+        let keys: Vec<String> = parsed.query_pairs().map(|(k, _)| k.to_string()).collect();
+
+        for key in keys {
+            let mut test_url = parsed.clone();
+            let new_pairs: Vec<(String, String)> = parsed
+                .query_pairs()
+                .map(|(k, v)| {
+                    if k == key {
+                        (k.to_string(), crlf_payload.to_string())
+                    } else {
+                        (k.to_string(), v.to_string())
+                    }
+                })
+                .collect();
+            test_url.query_pairs_mut().clear().extend_pairs(new_pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+
+            if let Ok(Some(resp)) = probe.get(test_url.as_str()).await {
+                if resp.has_header("x-sentinel-injected")
+                    || resp.headers.iter().any(|(k, v)| k.as_str().eq_ignore_ascii_case("x-sentinel-injected") || v.as_bytes().windows(13).any(|w| w == b"crlf_detected"))
+                {
+                    findings.push(NativeFinding::build(
+                        &CRLF_INJECTION,
+                        target_id,
+                        scan_id,
+                        url,
+                        &format!(
+                            "The endpoint `{}` is vulnerable to CRLF HTTP response header injection via parameter `{key}`. \
+                             Injected header `X-Sentinel-Injected: crlf_detected` was reflected directly into the server response headers.",
+                            parsed.path()
+                        ),
+                        vec![format!("curl -sSI '{}'", test_url.as_str())],
+                        vec![NativeFinding::evidence(
+                            "crlf_injection_evidence",
+                            "Injected response header detected",
+                            &format!("Header X-Sentinel-Injected observed in response headers for {}", test_url.as_str()),
+                        )],
+                    ));
+                    if findings.len() >= 3 {
+                        return findings;
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── Debug Parameter Exposure ──────────────────────────────────────────────────
+
+async fn check_debug_param_exposure(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    discovered: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let debug_flags = ["debug=true", "debug=1", "trace=true", "test=1", "show_errors=1"];
+
+    for url in discovered.iter().take(15) {
+        let Ok(parsed) = url::Url::parse(url) else { continue };
+        let base_path = parsed.path();
+
+        for flag in &debug_flags {
+            let (k, v) = match flag.split_once('=') {
+                Some((k, v)) => (k, v),
+                None => (*flag, ""),
+            };
+            let mut test_url = parsed.clone();
+            test_url.query_pairs_mut().append_pair(k, v);
+
+            if let Ok(Some(resp)) = probe.get(test_url.as_str()).await {
+                if resp.status == 200 {
+                    let body_lower = resp.body.to_lowercase();
+                    if body_lower.contains("traceback (most recent call last)")
+                        || body_lower.contains("stack trace:")
+                        || body_lower.contains("\"debug\": true")
+                        || body_lower.contains("sql query:")
+                        || body_lower.contains("execution_time_ms")
+                        || body_lower.contains("php stack trace")
+                    {
+                        findings.push(NativeFinding::build(
+                            &DEBUG_PARAM_EXPOSURE,
+                            target_id,
+                            scan_id,
+                            url,
+                            &format!(
+                                "The endpoint `{base_path}` exposed internal application debug and diagnostic information \
+                                 when activated with flag `{flag}`."
+                            ),
+                            vec![format!("curl -sSf '{}'", test_url.as_str())],
+                            vec![NativeFinding::evidence(
+                                "debug_param_output",
+                                "Debug output detected in response",
+                                &truncate(&resp.body, 200),
+                            )],
+                        ));
+                        if findings.len() >= 2 {
+                            return findings;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+// ── Backup Sensitive Files ────────────────────────────────────────────────────
+
+async fn check_backup_sensitive_files(
+    probe: &Probe,
+    target_id: Uuid,
+    scan_id: Uuid,
+    origin: &str,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let backup_paths = [
+        "/backup.zip",
+        "/backup.sql",
+        "/db.sql",
+        "/dump.sql",
+        "/site.tar.gz",
+        "/app.zip",
+        "/.env.bak",
+        "/web.config.bak",
+        "/config.php.bak",
+    ];
+
+    for path in &backup_paths {
+        let test_url = format!("{origin}{path}");
+        if let Ok(Some(resp)) = probe.get(&test_url).await {
+            let ctype = resp.header("content-type").unwrap_or_default().to_lowercase();
+            if resp.status == 200 && !ctype.contains("html") && resp.body.len() > 50 {
+                let is_archive_or_sql = resp.body.starts_with("PK\x03\x04")
+                    || resp.body.contains("INSERT INTO")
+                    || resp.body.contains("CREATE TABLE")
+                    || resp.body.contains("DATABASE")
+                    || resp.body.contains("DB_PASSWORD")
+                    || ctype.contains("zip")
+                    || ctype.contains("tar")
+                    || ctype.contains("octet-stream");
+
+                if is_archive_or_sql {
+                    findings.push(NativeFinding::build(
+                        &BACKUP_SENSITIVE_FILES,
+                        target_id,
+                        scan_id,
+                        &test_url,
+                        &format!(
+                            "Publicly accessible backup or configuration file discovered at `{test_url}` \
+                             (Content-Type: `{ctype}`, size: {} bytes).",
+                            resp.body.len()
+                        ),
+                        vec![format!("curl -sI '{test_url}'")],
+                        vec![NativeFinding::evidence(
+                            "backup_file_exposure",
+                            "Sensitive backup file publicly downloadable",
+                            &format!("Path {path} returned HTTP 200 with non-HTML content type {ctype}"),
+                        )],
+                    ));
+                    if findings.len() >= 3 {
+                        return findings;
+                    }
                 }
             }
         }

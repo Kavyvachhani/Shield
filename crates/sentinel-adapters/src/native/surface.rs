@@ -108,6 +108,30 @@ pub fn record(target_id: Uuid, scan_id: Uuid, base_url: &str, crawl: &Crawl) -> 
         ));
     }
 
+    // Shadow API reconciliation: observed API routes absent from declared specs
+    if !crawl.declared.is_empty() {
+        let declared_urls: std::collections::HashSet<_> = crawl.declared.iter().map(|e| e.url.as_str()).collect();
+        let shadow_endpoints: Vec<String> = crawl.pages.iter()
+            .filter(|p| {
+                let path = p.url.split('?').next().unwrap_or(&p.url);
+                (path.contains("/api/") || path.contains("/v1/") || path.contains("/v2/") || path.contains("/graphql"))
+                    && !declared_urls.contains(p.url.as_str())
+            })
+            .map(|p| p.url.clone())
+            .collect();
+
+        if !shadow_endpoints.is_empty() {
+            evidences.push(NativeFinding::evidence(
+                "assessment_surface",
+                &format!("Undocumented / Shadow API Routes Observed ({})", shadow_endpoints.len()),
+                &format!(
+                    "{}\n\nThese API routes responded to traffic during discovery but were absent from declared OpenAPI / schema specifications.",
+                    listing(&shadow_endpoints, 30)
+                ),
+            ));
+        }
+    }
+
     let mut finding = NativeFinding::build(
         &ASSESSMENT_SURFACE,
         target_id,

@@ -22,7 +22,7 @@ a single priority ranking, and reports written for the two audiences that actual
 
 ## What it does
 
-- **Scans without setup.** A built-in native check engine ships 80 checks covering
+- **Scans without setup.** A built-in native check engine ships 87 checks covering
   security headers, TLS configuration, cookie flags, cross-origin isolation, CORS policy,
   exposure surface, authentication & authorization audits (GraphQL introspection, JWT weak algorithms,
   unprotected APIs, rate limiting, IDOR sequential IDs, default credentials), content analysis, client-side patterns and information disclosure —

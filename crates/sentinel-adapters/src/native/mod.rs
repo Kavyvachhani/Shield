@@ -26,6 +26,7 @@
 pub mod active;
 pub mod aggregate;
 pub mod auth_audit;
+pub mod bola;
 pub mod builder;
 pub mod content;
 pub mod crawl;
@@ -62,13 +63,58 @@ pub fn all_specs() -> Vec<&'static builder::CheckSpec> {
         .chain(exposure::SPECS)
         .chain(active::SPECS)
         .chain(auth_audit::SPECS)
+        .chain(bola::SPECS)
         .collect()
 }
 
+pub type LogCallback = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct ConfigurableNativeAdapter {
+    pub reporter: Option<LogCallback>,
+}
+
+impl ConfigurableNativeAdapter {
+    pub fn new() -> Self {
+        Self { reporter: None }
+    }
+
+    pub fn with_reporter(reporter: LogCallback) -> Self {
+        Self { reporter: Some(reporter) }
+    }
+
+    pub fn report(&self, msg: &str) {
+        if let Some(r) = &self.reporter {
+            r(msg);
+        }
+        tracing::info!(msg, "Sentinel Native");
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 pub struct NativeCheckAdapter;
+
+impl NativeCheckAdapter {
+    pub fn with_reporter(reporter: LogCallback) -> ConfigurableNativeAdapter {
+        ConfigurableNativeAdapter::with_reporter(reporter)
+    }
+}
 
 #[async_trait]
 impl ScannerAdapter for NativeCheckAdapter {
+    fn name(&self) -> &'static str {
+        ConfigurableNativeAdapter::default().name()
+    }
+    async fn healthcheck(&self) -> Result<bool> {
+        ConfigurableNativeAdapter::default().healthcheck().await
+    }
+    async fn run(&self, target: &Target, config_json: &str) -> Result<Vec<Finding>> {
+        ConfigurableNativeAdapter::default().run(target, config_json).await
+    }
+}
+
+#[async_trait]
+impl ScannerAdapter for ConfigurableNativeAdapter {
     fn name(&self) -> &'static str {
         "Sentinel Native"
     }
@@ -95,11 +141,7 @@ impl ScannerAdapter for NativeCheckAdapter {
             return Err(anyhow!("target has no base URL; nothing for the native engine to assess"));
         }
 
-        tracing::info!(
-            target_url = %base_url,
-            rate_limit_rps = rps,
-            "Sentinel Native: starting assessment"
-        );
+        self.report(&format!("Starting Sentinel Native assessment on {base_url} (rate limit: {rps} rps)..."));
 
         let probe = Probe::new(target, rps, cfg.timeout_seconds)?;
         let mut findings: Vec<Finding> = Vec::new();
@@ -113,7 +155,7 @@ impl ScannerAdapter for NativeCheckAdapter {
                 ))
             }
         };
-        tracing::info!(status = root.status, "Sentinel Native: root document fetched");
+        self.report(&format!("Root document fetched (HTTP {}). Crawling target and checking route dictionary, sitemaps, and API specifications...", root.status));
 
         // ── 2. Walk the application ──────────────────────────────────────────
         //
@@ -134,15 +176,17 @@ impl ScannerAdapter for NativeCheckAdapter {
                 stopped_because: crawl::StopReason::Exhausted,
             }
         };
-        tracing::info!(
-            pages = crawl.pages.len(),
-            not_visited = crawl.not_visited.len(),
-            external_hosts = crawl.external_hosts.len(),
-            reason = ?crawl.stopped_because,
-            "Sentinel Native: discovery complete"
-        );
+        self.report(&format!(
+            "Discovery complete: {} pages fetched, {} declared routes identified across wordlist and specifications",
+            crawl.pages.len(),
+            crawl.declared.len()
+        ));
 
         // ── 3. Passive analysis, on every page discovered ────────────────────
+        self.report(&format!(
+            "Evaluating security headers, content integrity, and disclosure rules across {} pages...",
+            crawl.pages.len()
+        ));
         let mut passive: Vec<Finding> = Vec::new();
         for page in &crawl.pages {
             passive.extend(headers::run(target_id, scan_id, page));
@@ -156,6 +200,7 @@ impl ScannerAdapter for NativeCheckAdapter {
 
         // ── 4. TLS certificate inspection (HTTPS targets only) ───────────────
         if let Some((host, port)) = https_host_port(&base_url) {
+            self.report(&format!("Inspecting TLS/SSL transport and certificate security on {host}:{port}..."));
             match tls::observe(&host, port, cfg.timeout_seconds).await {
                 Ok(Some(observation)) => {
                     findings.extend(tls::analyze(
@@ -187,11 +232,16 @@ impl ScannerAdapter for NativeCheckAdapter {
             .map(|p| p.final_url.clone())
             .chain(crawl.declared.iter().map(|e| e.url.clone()))
             .collect();
+        self.report(&format!(
+            "Executing active security checks (CORS, HTTP Methods, Host Header, Open Redirects) across {} endpoints...",
+            discovered.len()
+        ));
         findings.extend(
             active::run(&probe, target_id, scan_id, &base_url, root, &discovered).await,
         );
 
         // ── 6. Sensitive path and metafile exposure ──────────────────────────
+        self.report("Checking sensitive path exposure, source maps, and security.txt disclosure contacts...");
         findings.extend(exposure::run(&probe, target_id, scan_id, &base_url).await);
 
         // ── 6b. Source maps behind the scripts the application loads ─────────
@@ -216,8 +266,17 @@ impl ScannerAdapter for NativeCheckAdapter {
         // Runs after the crawl so auth_audit::run receives the full discovered
         // endpoint list. These checks use the probe's own rate limit, so they
         // sit alongside the active checks that also touch the network.
+        self.report(&format!(
+            "Running authentication & authorization audit checks across {} endpoints (GraphQL, JWT, IDOR, SSRF, Cloud Metadata, WCD, Database Errors)...",
+            discovered.len()
+        ));
         findings.extend(
             auth_audit::run(&probe, target_id, scan_id, &base_url, &discovered).await,
+        );
+
+        // ── 8b. Multi-user BOLA / IDOR cross-account audit ────────────────────
+        findings.extend(
+            bola::audit_bola(&probe, target_id, scan_id, &discovered, None).await,
         );
 
         // ── 9. Score every finding before handing them back ──────────────────
@@ -225,6 +284,10 @@ impl ScannerAdapter for NativeCheckAdapter {
             sentinel_core::scoring::priority::PriorityScoringEngine::score_and_explain(finding);
         }
 
+        self.report(&format!(
+            "Native assessment complete: {} findings identified and verified with evidence",
+            findings.len()
+        ));
         tracing::info!(
             finding_count = findings.len(),
             target_url = %base_url,

@@ -8,3 +8,5 @@ pub mod scoring;
 pub mod threat;
 pub mod ml;
 pub mod reporting;
+pub mod diff;
+pub mod identity;
